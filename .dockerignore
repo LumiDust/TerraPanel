@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+.pyright
+data
+config.yaml
+.env
+AGENTS.md
+task_plan.md
+findings.md
+progress.md
+docs/knowledge
+frontend/node_modules

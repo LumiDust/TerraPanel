@@ -1,0 +1,14 @@
+environment: development
+log_level: info
+
+http:
+  bind_address: 127.0.0.1
+  port: 8080
+
+storage:
+  data_dir: data
+  servers_dir: data/servers
+  backups_dir: data/backups
+
+mods:
+  max_upload_size: 268435456

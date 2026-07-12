@@ -1,0 +1,36 @@
+# Local agent instructions and workspace state
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.codex/
+/.claude/
+
+# Local planning and research
+/task_plan.md
+/findings.md
+/progress.md
+/.planning/
+/.plan-attestation
+
+# Local knowledge bases
+/docs/knowledge/
+
+# Python
+/.venv/
+/.uv-cache/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+/.pyright/
+/.coverage
+/htmlcov/
+/dist/
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+
+# Runtime data and local configuration
+/data/
+/config.yaml
+/.env
