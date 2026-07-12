@@ -5,6 +5,7 @@ __pycache__
 .ruff_cache
 .pyright
 data
+tests
 config.yaml
 .env
 AGENTS.md

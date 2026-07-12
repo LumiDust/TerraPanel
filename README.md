@@ -1,214 +1,201 @@
 # TerraPanel
 
-TerraPanel 是面向 Terraria tModLoader Dedicated Server 的 Web 管理面板。
+TerraPanel 是一个面向 Terraria tModLoader 专用服务器的 Web 管理面板。你可以在浏览器中完成服务器安装、启动、配置、模组管理、存档切换、备份恢复和日志查看，不需要反复手动执行 tModLoader 命令。
 
-## 当前能力
+## 主要功能
 
-- 管理对象是 tModLoader Dedicated Server，不是原版 Terraria 或《饥荒联机版》服务器。
-- 第一版面向 Linux x86_64。默认流程是在 Web 界面填写安装与世界配置，由面板下载官方 tModLoader Release、匹配的 .NET 运行时并完成一键开服。
-- 支持安装任务状态与日志、取消、更新、已有实例关联、启动、停止、控制台、世界选择、`serverconfig.txt`、本地与 Workshop 模组发现、模组启用列表、日志、备份和恢复。
-- Windows 进程执行、自动安装更新、多实例、定时任务和用户认证尚未实现。
-- 所有路径和外部命令输入必须经过校验，文件与进程操作只能发生在已配置的服务器目录内。
+- 自动下载 tModLoader 和运行依赖，配置完成后可以一键开服
+- 启动、停止和查看服务器状态
+- 在浏览器中使用服务端控制台
+- 修改端口、玩家上限、密码和欢迎信息
+- 上传、启用、停用和删除本地 `.tmod` 模组
+- 查看已安装的 Workshop 模组
+- 上传、切换和删除世界存档
+- 创建、下载、恢复和删除备份
+- 查看并筛选服务端日志
 
-## 技术方向
+## 适用范围
 
-后端采用 Python 3.14、FastAPI 和 Pydantic，按 API、Service、Model/Repository 分层。应用入口负责集中装配依赖，业务服务显式接收依赖，不使用全局可变状态。
+当前版本面向 Linux x86_64，优先推荐使用 Docker。它管理的是 tModLoader Dedicated Server，不是原版 Terraria 服务器。
 
-具体实现前必须核实目标 tModLoader Dedicated Server 版本的配置格式、启动参数和平台行为，不复用其他游戏服务器的领域模型。
+目前以单个服务器实例为主，尚未提供多实例、定时任务和用户登录功能。Windows 裸机运行也不在当前支持范围内。
 
-当前目录边界：
+## Docker 快速开始
 
-```text
-src/terrapanel/          应用入口、配置与领域代码
-src/terrapanel/api/      HTTP 路由与请求响应模型
-tests/                   单元测试和 API 测试
-scripts/                 Linux 启动与维护脚本
-```
-
-## 实例目录
-
-新实例会在 `storage.root_dir/servers` 内自动创建，实例目录名可在安装向导中修改。最终目录遵循 tModLoader DedicatedServerUtils 使用的结构：
-
-```text
-primary/
-├── server/
-│   ├── start-tModLoaderServer.sh
-│   └── tModLoader.dll
-├── Mods/
-├── Worlds/
-├── steamapps/workshop/
-└── serverconfig.txt
-```
-
-`server/` 中的 tModLoader 与 .NET 由官方安装流程下载；`Mods/`、`Worlds/`、Workshop 目录、日志目录和 `serverconfig.txt` 由面板初始化。受管目录和文件不得是符号链接或目录联接。
-
-## 本地运行
-
-项目使用 [uv](https://docs.astral.sh/uv/) 管理 Python、虚拟环境和依赖：
-
-```powershell
-# 安装锁定依赖
-uv sync --frozen
-
-# 创建本地配置并启动（PowerShell 可使用 Copy-Item）
-cp config.example.yaml config.yaml
-uv run terrapanel --config config.yaml
-```
-
-管理界面位于 `http://127.0.0.1:8080/`，健康检查地址为 `http://127.0.0.1:8080/api/v1/health`，OpenAPI 页面位于 `http://127.0.0.1:8080/docs`。
-
-也可以通过 Shell 脚本启动：
+服务器需要安装 Docker 和 Docker Compose，并能访问 GitHub 与 Steam 下载服务。
 
 ```bash
-sh scripts/start.sh --config config.yaml
+git clone https://github.com/LumiDust/TerraPanel.git
+cd TerraPanel
+mkdir -p data
+sudo chown -R 10001:10001 data
+docker compose pull
+docker compose up -d --no-build
 ```
 
-首次打开管理界面后，在“新建服务器”中填写实例、世界和端口配置并执行“安装并开服”。默认安装最新稳定版，也可以填写 `v2024.6.3.1` 形式的版本标签。等价 API：
+启动后，在服务器本机打开：
+
+```text
+http://127.0.0.1:8080
+```
+
+面板默认只监听宿主机本地地址。远程管理时可以使用 SSH 隧道：
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/provisioning \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Primary Server","root_dir":"primary","world_name":"TerraPanel","world_size":1,"difficulty":1,"max_players":8,"port":7777,"password":"","motd":"","secure":true,"upnp":false,"start_after_install":true}'
+ssh -L 8080:127.0.0.1:8080 user@your-server
 ```
 
-自动安装需要宿主机提供 `bash`、`curl`、`tar` 和 `unzip`。Docker 镜像已经包含这些系统工具及 SteamCMD 所需的 32 位运行库；Linux 裸机启动时若缺少工具，任务日志会列出缺失项。面板不会从 Web 进程提权执行 `apt`、`dnf` 等系统包管理器。
+然后在自己电脑的浏览器中打开 `http://127.0.0.1:8080`。
 
-裸机运行时只需修改一个根目录，面板状态、服务端、世界、模组、Workshop、日志和备份都会随之移动：
+## 第一次开服
+
+1. 打开面板，在安装页面填写服务器名称、世界名称、难度、玩家上限和端口。
+2. tModLoader 版本留空时会使用当前稳定版；需要固定版本时再填写对应版本号。
+3. 点击“安装并开服”，等待安装日志完成。
+4. 状态变为“运行中”后，玩家可以通过服务器地址和游戏端口加入。
+
+首次安装需要下载 tModLoader、.NET 运行时和 Steam 相关内容，耗时取决于服务器网络。不要在安装过程中关闭容器或删除数据目录。
+
+## 数据保存
+
+默认情况下，所有服务器数据都通过 bind mount 保存在项目根目录的 `./data` 中。这个目录可以直接查看、复制和备份，更新或重建容器不会删除其中的内容。
+
+Linux 上首次启动前需要创建目录，并让容器用户拥有写入权限：
+
+```bash
+mkdir -p data
+sudo chown -R 10001:10001 data
+```
+
+主要数据都位于这个目录下：
+
+| 内容 | 相对位置 |
+|------|----------|
+| 服务端文件 | `servers/<实例目录>/server` |
+| 世界存档 | `servers/<实例目录>/Worlds` |
+| 本地模组 | `servers/<实例目录>/Mods` |
+| Workshop 内容 | `servers/<实例目录>/steamapps` |
+| 服务端日志 | `servers/<实例目录>/logs` |
+| 面板备份 | `backups` |
+
+需要把数据放到其他位置时，直接修改 `compose.yaml` 中 `volumes` 的左侧路径，并提前创建目标目录、授予 UID/GID `10001:10001` 写入权限。
+
+从使用命名卷的旧版本升级时，旧数据不会自动出现在 `./data`。升级前应停止服务器并备份或迁移旧卷；确认新目录中的世界、模组和备份完整后，再处理旧卷。
+
+## 端口和常用设置
+
+镜像、端口映射和数据目录都直接写在 `compose.yaml` 中：
 
 ```yaml
-storage:
-  root_dir: /srv/terrapanel
+services:
+  terrapanel:
+    image: "ghcr.io/lumidust/terrapanel:latest"
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "7777:7777"
+    volumes:
+      - "./data:/data"
 ```
 
-环境变量使用 `TERRAPANEL_` 前缀和双下划线表示嵌套字段，例如 `TERRAPANEL_HTTP__PORT=8081`、`TERRAPANEL_STORAGE__ROOT_DIR=/srv/terrapanel`。旧的 `data_dir`、`servers_dir` 和 `backups_dir` 仍可用于分别覆盖目录。`.tmod` 上传上限默认是 256 MiB，可通过 `TERRAPANEL_MODS__MAX_UPLOAD_SIZE` 按字节覆盖；世界存档上传总上限默认是 512 MiB，可通过 `TERRAPANEL_WORLDS__MAX_UPLOAD_SIZE` 调整。
+- 面板映射 `127.0.0.1:8080:8080` 中，中间的 `8080` 是宿主机端口，最后的 `8080` 是容器端口。
+- 游戏映射 `7777:7777` 中，左侧是玩家连接的宿主机端口，右侧是容器端口，并且必须与面板中的服务器端口一致。
+- 数据映射 `./data:/data` 中，左侧是宿主机目录，右侧是容器内固定目录，不应修改右侧 `/data`。
+- `image` 后的标签决定使用的 TerraPanel 版本。
 
-## API
-
-所有业务接口位于 `/api/v1`：
-
-| 功能 | 接口 |
-|------|------|
-| 健康检查 | `GET /api/v1/health` |
-| 安装与更新 | `GET/POST /provisioning`、`POST /provisioning/update`、`POST /provisioning/cancel`、`GET /provisioning/logs` |
-| 实例关联与移除 | `GET/PUT/DELETE /instance` |
-| 生命周期 | `POST /instance/start`、`POST /instance/stop`、`GET /instance/status` |
-| 控制台 | `GET/POST /instance/console` |
-| 服务配置 | `GET/PATCH /server-config` |
-| 世界存档 | `GET /worlds`、`POST /worlds/upload`、`POST /worlds/select`、`DELETE /worlds/{name}` |
-| 模组 | `GET /mods`、`POST /mods/upload`、`POST /mods/enable`、`POST /mods/disable`、`DELETE /mods/local/{name}` |
-| 日志 | `GET /logs/{console\|server\|launch\|native}` |
-| 备份 | `GET/POST /backups`、`GET /backups/{id}/download`、`POST /backups/{id}/restore`、`DELETE /backups/{id}` |
-
-完整请求模型和响应模型见运行中的 `/docs`。
-
-服务端停止后，可以在模组页直接上传 `.tmod`，也可以使用 API。上传会校验包头、声明长度和 SHA-1，按包内模组名保存，且不会自动启用；同名更新需要显式允许覆盖：
+修改 `compose.yaml` 后重新执行：
 
 ```bash
-curl -F 'file=@ExampleMod.tmod' http://127.0.0.1:8080/api/v1/mods/upload
-curl -F 'file=@ExampleMod.tmod' 'http://127.0.0.1:8080/api/v1/mods/upload?replace=true'
-curl -X DELETE http://127.0.0.1:8080/api/v1/mods/local/ExampleMod
+docker compose up -d --no-build
 ```
 
-删除接口只处理本地上传的 `.tmod`，并同步清理 `enabled.json`；Workshop 模组仍由其订阅和更新流程管理。
+如果玩家无法加入，请确认游戏端口已经在主机防火墙和云服务商安全组中放行。
 
-“存档”页面支持导入一个 `.wld` 和可选的同名 `.twld`、切换当前世界及删除非当前世界。导入不会自动切换当前世界；覆盖导入会把 `.wld/.twld` 作为一组替换。删除会清理同名主文件和直接 `.bak` 伴随文件，但保留 `Worlds/Backups` 中的历史 ZIP：
+## 日常管理
 
-```bash
-curl -F 'files=@Example.wld' -F 'files=@Example.twld' \
-  http://127.0.0.1:8080/api/v1/worlds/upload
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"path":"Worlds/Example.wld"}' \
-  http://127.0.0.1:8080/api/v1/worlds/select
-```
+### 模组
 
-## Docker
+修改模组前先停止服务端。在“模组”页面上传 `.tmod` 文件，然后启用需要的模组并重新开服。同名模组需要确认覆盖；删除本地模组时会同步从启用列表中移除。
 
-从 GitHub Container Registry 拉取最新的 Linux x86_64 镜像并启动：
+Workshop 模组会显示在列表中，但其下载和更新仍由 Workshop 配置与 Steam 流程负责。
+
+### 世界存档
+
+“存档”页面可以上传 `.wld`，以及可选的同名 `.twld` 文件。上传后再选择它作为当前世界；正在使用的世界不能直接删除。
+
+切换、覆盖或删除存档前应停止服务端并创建备份。
+
+### 备份
+
+在更新 tModLoader、替换模组或切换世界前创建备份。重要备份建议下载到其他设备，避免只保存在同一块磁盘上。
+
+恢复备份会替换当前服务器内容，操作前必须停止服务端。
+
+### 控制台和日志
+
+“控制台”页面用于发送服务端命令并查看实时输出。“日志”页面用于检查启动失败、模组加载错误和运行异常。
+
+## 更新 TerraPanel
+
+1. 在面板中创建备份。
+2. 停止 tModLoader 服务端。
+3. 拉取新镜像并重建面板容器。
 
 ```bash
 docker compose pull
 docker compose up -d --no-build
 ```
 
-也可以固定到版本标签，避免后续自动切换版本：
+数据目录不会因容器更新而删除。需要固定版本时，直接修改 `compose.yaml` 中的镜像标签：
 
-```bash
-TERRAPANEL_IMAGE=ghcr.io/lumidust/terrapanel:0.1.0 docker compose up -d --no-build
+```yaml
+image: "ghcr.io/lumidust/terrapanel:<版本号>"
 ```
 
-本地修改源码后需要自行构建时，覆盖镜像名并启用构建：
+可用版本以 GitHub Packages 中实际发布的标签为准。
+
+## 不使用 Docker
+
+Linux 裸机需要 Python 3.14、uv、bash、curl、tar、unzip，以及 SteamCMD 所需的 32 位运行库。缺少系统依赖时建议改用 Docker。
 
 ```bash
-TERRAPANEL_IMAGE=terrapanel:dev docker compose up -d --build
+git clone https://github.com/LumiDust/TerraPanel.git
+cd TerraPanel
+uv sync --frozen
+cp config.example.yaml config.yaml
+sh scripts/start.sh --config config.yaml
 ```
 
-使用离线镜像归档时，先校验并加载镜像，再通过 Compose 启动：
+启动前请在 `config.yaml` 中把 `storage.root_dir` 改成用于长期保存服务器数据的目录。
+
+## 安全提醒
+
+当前版本没有内置账号和登录验证，不要直接把面板端口暴露到公网。远程管理建议使用以下任一方式：
+
+- SSH 隧道
+- 带 TLS 和身份验证的反向代理
+- 受控 VPN 或内网
+
+游戏端口可以按需对玩家开放，面板端口应保持受保护状态。
+
+## 常见问题
+
+### 镜像无法拉取
+
+如果出现 `denied` 或 `unauthorized`，请确认 GHCR 容器包已经设为 Public；私有包需要先登录 `ghcr.io`。
+
+### 数据目录没有写入权限
+
+Docker 容器使用 UID/GID `10001:10001`。绑定宿主目录时，需要让该用户能够读写目录。
+
+### 安装一直失败
+
+先检查服务器是否能访问 GitHub 和 Steam，再到面板的安装日志中查看具体失败步骤。网络中断后可以重新发起安装或更新。
+
+### 容器是否正常运行
 
 ```bash
-sha256sum --check terrapanel-0.1.0-linux-amd64.tar.sha256
-docker load --input terrapanel-0.1.0-linux-amd64.tar
-TERRAPANEL_IMAGE=terrapanel:0.1.0 docker compose up -d --no-build
+docker compose ps
+docker compose logs --tail=200 terrapanel
 ```
 
-仓库中的 GitHub Actions 会自动构建并发布 `linux/amd64` 镜像到 GHCR：
-
-| Git 事件 | 发布标签 |
-|----------|----------|
-| 推送到 `main` | `latest`、`sha-<短提交号>` |
-| 推送 `v0.1.0` 形式的版本标签 | `0.1.0`、`0.1`、`0`、`sha-<短提交号>` |
-| 手动运行工作流 | 当前分支对应的 SHA 标签；`main` 同时更新 `latest` |
-
-首次发布后，仓库所有者需要在 GitHub Packages 中把容器包可见性设为 Public，公开用户才能免登录拉取。包保持私有时，需要先使用具有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
-
-容器默认只在宿主机 `127.0.0.1:8080` 发布面板端口，并把宿主机 Terraria `7777` 映射到容器 `7777`；运行数据和自动安装的服务器保存在 `terrapanel-data` 数据卷。`TERRAPANEL_GAME_PORT` 控制宿主机端口，`TERRAPANEL_SERVER_PORT` 必须与安装向导中的服务器端口一致，两者默认都是 `7777`。
-
-所有持久化文件都集中在独立容器目录 `/data`，不写入 `/var`。其中 `<实例目录>` 默认为 `primary`：
-
-| 数据 | 容器路径 |
-|------|----------|
-| 面板状态 | `/data/instance.json`、`/data/provisioning.json` |
-| 服务端实例 | `/data/servers/<实例目录>/server` |
-| 世界存档 | `/data/servers/<实例目录>/Worlds` |
-| 本地模组与启用列表 | `/data/servers/<实例目录>/Mods` |
-| Workshop 内容 | `/data/servers/<实例目录>/steamapps` |
-| 日志 | `/data/servers/<实例目录>/logs` |
-| 备份 | `/data/backups` |
-
-设置 `TERRAPANEL_DATA_PATH` 可以把整个固定布局绑定到宿主目录 `/data`：
-
-```bash
-mkdir -p ./terrapanel-data
-sudo chown -R 10001:10001 ./terrapanel-data
-TERRAPANEL_DATA_PATH=./terrapanel-data docker compose up -d --build
-```
-
-容器以 `10001:10001` 运行，宿主目录必须允许该用户读写。未设置 `TERRAPANEL_DATA_PATH` 时继续使用原有 `terrapanel-data` 命名卷；旧版本卷中的文件结构不变，只是容器内挂载点从 `/var/lib/terrapanel` 调整为 `/data`。
-
-第一版没有内置认证。不要直接发布到公网；远程使用时应放在带 TLS 和认证的反向代理或受控 VPN 后面。
-
-## 前端开发
-
-后端运行在 `8080` 时，可启动带 API 代理的 Vite 开发服务器：
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-生产静态资源由 `npm run build` 输出到 `src/terrapanel/static/`，随后随 Python wheel 一同打包。
-
-## 质量检查
-
-```bash
-uv run ruff check .
-uv run pyright
-uv run pytest
-uv lock --check
-
-cd frontend
-npm ci
-npm run build
-npm run typecheck
-npm exec playwright test
-```
+面板健康时，`docker compose ps` 会显示容器为 `healthy`。

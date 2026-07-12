@@ -26,6 +26,7 @@ __pycache__/
 /.coverage
 /htmlcov/
 /dist/
+/tests/
 /frontend/node_modules/
 /frontend/test-results/
 /frontend/playwright-report/
