@@ -22,9 +22,7 @@ RUN dpkg --add-architecture i386 \
         tar \
         tini \
         unzip \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 terrapanel \
-    && useradd --uid 10001 --gid terrapanel --home-dir /home/terrapanel --create-home --system terrapanel
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
@@ -40,10 +38,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 RUN uv sync --frozen --no-dev \
-    && mkdir -p /data/servers /data/backups \
-    && chown -R terrapanel:terrapanel /data
+    && mkdir -p /data/servers /data/backups
 
-USER terrapanel
+USER root
 VOLUME ["/data"]
 EXPOSE 8080 7777
 
