@@ -77,7 +77,10 @@ input:focus, select:focus { outline: 2px solid #237a5b30; border-color: #237a5b;
 .progress-strip .current span { box-shadow: 0 0 0 4px #39936f22; }
 .progress-strip small { font-size: 11px; }
 .provision-error { margin-bottom: 10px; color: #9a3434; font-size: 13px; overflow-wrap: anywhere; }
+.terminal-shell { position: relative; }
 .setup-terminal { height: 210px; overflow: auto; padding: 12px; border-radius: 5px; background: #171a1f; color: #d6dae0; font: 12px/1.6 "Cascadia Code", Consolas, monospace; }
+.terminal-jump { position: absolute; right: 14px; bottom: 14px; z-index: 2; border-color: #464d55; background: #292e34; color: #e4e7ea; box-shadow: 0 3px 10px #0006; }
+.terminal-jump:hover { background: #353b42; }
 .cancel-task { margin-top: 10px; }
 .advanced-association { margin-top: 20px; border-top: 1px solid #e2e5e7; padding-top: 14px; }
 .advanced-association summary { cursor: pointer; color: #59616b; font-size: 13px; }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ArchiveRestore,
+  ArrowDownToLine,
   Boxes,
   Check,
   ChevronRight,
@@ -114,7 +115,12 @@ const setupForm = ref<ProvisionRequest>({
   start_after_install: true,
 });
 const consoleView = ref<HTMLElement | null>(null);
+const provisioningView = ref<HTMLElement | null>(null);
+const consoleFollowing = ref(true);
+const provisioningFollowing = ref(true);
 let timer: number | undefined;
+
+const scrollEndThreshold = 48;
 
 const configured = computed(() => instance.value?.configured === true);
 const running = computed(() => instance.value?.process.state === "running");
@@ -237,17 +243,47 @@ async function refreshProvisioning() {
   provisioning.value = await api.provisioning();
   const last = provisionLogs.value.at(-1)?.sequence ?? 0;
   const entries = await api.provisionLogs(last);
-  if (entries.length) provisionLogs.value.push(...entries);
+  if (entries.length) {
+    const shouldFollow = provisioningFollowing.value;
+    provisionLogs.value.push(...entries);
+    if (shouldFollow) await scrollProvisioningToEnd();
+  }
 }
 
 async function refreshConsole() {
   const last = consoleEntries.value.at(-1)?.sequence ?? 0;
   const entries = await api.console(last);
   if (entries.length) {
+    const shouldFollow = consoleFollowing.value;
     consoleEntries.value.push(...entries);
-    await nextTick();
-    consoleView.value?.scrollTo({ top: consoleView.value.scrollHeight });
+    if (shouldFollow) await scrollConsoleToEnd();
   }
+}
+
+function isNearScrollEnd(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= scrollEndThreshold;
+}
+
+function handleConsoleScroll() {
+  if (consoleView.value) consoleFollowing.value = isNearScrollEnd(consoleView.value);
+}
+
+function handleProvisioningScroll() {
+  if (provisioningView.value) provisioningFollowing.value = isNearScrollEnd(provisioningView.value);
+}
+
+async function scrollConsoleToEnd() {
+  consoleFollowing.value = true;
+  await nextTick();
+  const element = consoleView.value;
+  if (element) element.scrollTop = element.scrollHeight;
+}
+
+async function scrollProvisioningToEnd() {
+  provisioningFollowing.value = true;
+  await nextTick();
+  const element = provisioningView.value;
+  if (element) element.scrollTop = element.scrollHeight;
 }
 
 async function refreshFiles(path = fileListing.value?.path ?? "") {
@@ -257,6 +293,8 @@ async function refreshFiles(path = fileListing.value?.path ?? "") {
 async function selectTab(tab: Tab) {
   activeTab.value = tab;
   if (tab === "files" && configured.value) await perform(() => refreshFiles());
+  if (tab === "console") await scrollConsoleToEnd();
+  if (tab === "overview" && provisioning.value?.state !== "idle") await scrollProvisioningToEnd();
 }
 
 function refreshCurrent() {
@@ -273,6 +311,7 @@ async function associate() {
 async function provisionServer() {
   await perform(async () => {
     provisionLogs.value = [];
+    provisioningFollowing.value = true;
     provisioning.value = await api.provision({
       ...setupForm.value,
       version: setupForm.value.version || null,
@@ -295,8 +334,9 @@ function updateServer() {
     confirmLabel: "开始更新",
     action: () => perform(async () => {
       provisionLogs.value = [];
+      provisioningFollowing.value = true;
       provisioning.value = await api.updateServer();
-      activeTab.value = "overview";
+      await selectTab("overview");
     }),
   });
 }
@@ -305,7 +345,7 @@ async function startServer() {
   await perform(async () => {
     await api.start();
     await refreshInstance();
-    activeTab.value = "console";
+    await selectTab("console");
   });
 }
 
@@ -665,9 +705,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <div v-for="(stage, index) in provisionStages" :key="stage.id" :class="{ active: index <= provisionStageIndex, current: stage.id === provisioning.stage }"><span>{{ index + 1 }}</span><small>{{ stage.label }}</small></div>
           </div>
           <div v-if="provisioning.error" class="provision-error">{{ provisioning.error }}</div>
-          <div class="setup-terminal" aria-live="polite">
-            <div v-if="!provisionLogs.length" class="terminal-empty">等待安装输出</div>
-            <div v-for="entry in provisionLogs" :key="entry.sequence" class="terminal-line"><time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span></div>
+          <div class="terminal-shell">
+            <div id="provisioning-output" ref="provisioningView" class="setup-terminal" aria-live="polite" @scroll="handleProvisioningScroll">
+              <div v-if="!provisionLogs.length" class="terminal-empty">等待安装输出</div>
+              <div v-for="entry in provisionLogs" :key="entry.sequence" class="terminal-line"><time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span></div>
+            </div>
+            <button v-if="!provisioningFollowing && provisionLogs.length" type="button" class="icon-button terminal-jump" title="跳到最后" aria-label="跳到最后" aria-controls="provisioning-output" @click="scrollProvisioningToEnd"><ArrowDownToLine :size="18" /></button>
           </div>
           <button v-if="provisioningRunning" class="secondary cancel-task" :disabled="busy" @click="cancelProvisioning"><X :size="17" />取消任务</button>
         </div>
@@ -688,7 +731,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <h2>{{ activeTabMeta.label }}尚未就绪</h2>
           <p>{{ provisioningRunning ? "服务器正在安装，任务会继续在后台运行。" : "请先完成服务器安装或关联已有安装。" }}</p>
         </div>
-        <button class="secondary" @click="activeTab = 'overview'"><Rocket :size="17" />查看安装进度</button>
+        <button class="secondary" @click="selectTab('overview')"><Rocket :size="17" />查看安装进度</button>
       </section>
 
       <template v-else>
@@ -703,9 +746,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <div v-for="(stage, index) in provisionStages" :key="stage.id" :class="{ active: index <= provisionStageIndex, current: stage.id === provisioning.stage }"><span>{{ index + 1 }}</span><small>{{ stage.label }}</small></div>
             </div>
             <div v-if="provisioning.error" class="provision-error">{{ provisioning.error }}</div>
-            <div class="setup-terminal" aria-live="polite">
-              <div v-if="!provisionLogs.length" class="terminal-empty">等待更新输出</div>
-              <div v-for="entry in provisionLogs" :key="entry.sequence" class="terminal-line"><time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span></div>
+            <div class="terminal-shell">
+              <div id="provisioning-output" ref="provisioningView" class="setup-terminal" aria-live="polite" @scroll="handleProvisioningScroll">
+                <div v-if="!provisionLogs.length" class="terminal-empty">等待更新输出</div>
+                <div v-for="entry in provisionLogs" :key="entry.sequence" class="terminal-line"><time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span></div>
+              </div>
+              <button v-if="!provisioningFollowing && provisionLogs.length" type="button" class="icon-button terminal-jump" title="跳到最后" aria-label="跳到最后" aria-controls="provisioning-output" @click="scrollProvisioningToEnd"><ArrowDownToLine :size="18" /></button>
             </div>
             <button v-if="provisioningRunning" class="secondary cancel-task" :disabled="busy" @click="cancelProvisioning"><X :size="17" />取消任务</button>
           </div>
@@ -713,7 +759,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <section class="panel server-summary">
               <div class="section-heading"><Server :size="20" /><div><h2>{{ instance?.instance?.name }}</h2><p>{{ instance?.instance?.install_dir }}</p></div></div>
               <div class="quick-actions">
-                <button class="secondary" @click="activeTab = 'console'"><SquareTerminal :size="16" />控制台</button>
+                <button class="secondary" @click="selectTab('console')"><SquareTerminal :size="16" />控制台</button>
                 <button class="secondary" :disabled="running || busy" @click="createBackup"><Save :size="16" />立即备份</button>
                 <button class="secondary" @click="activeTab = 'logs'; refreshLog()"><FileText :size="16" />查看日志</button>
               </div>
@@ -727,7 +773,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <section class="panel activity-panel">
               <div class="section-heading"><SquareTerminal :size="20" /><div><h2>近期活动</h2><p>服务端控制台</p></div></div>
               <div class="activity-list">
-                <button v-for="entry in recentConsole" :key="entry.sequence" @click="activeTab = 'console'">
+                <button v-for="entry in recentConsole" :key="entry.sequence" @click="selectTab('console')">
                   <time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span>
                 </button>
                 <div v-if="!recentConsole.length" class="empty">暂无控制台活动</div>
@@ -737,11 +783,14 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-if="activeTab === 'console'" class="console-panel">
-          <div ref="consoleView" class="terminal" aria-live="polite">
-            <div v-if="!consoleEntries.length" class="terminal-empty">等待服务端输出</div>
-            <div v-for="entry in consoleEntries" :key="entry.sequence" :class="['terminal-line', entry.stream]">
-              <time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span>
+          <div class="terminal-shell">
+            <div id="server-console-output" ref="consoleView" class="terminal" aria-live="polite" @scroll="handleConsoleScroll">
+              <div v-if="!consoleEntries.length" class="terminal-empty">等待服务端输出</div>
+              <div v-for="entry in consoleEntries" :key="entry.sequence" :class="['terminal-line', entry.stream]">
+                <time>{{ new Date(entry.timestamp).toLocaleTimeString() }}</time><span>{{ entry.text }}</span>
+              </div>
             </div>
+            <button v-if="!consoleFollowing && consoleEntries.length" type="button" class="icon-button terminal-jump" title="跳到最后" aria-label="跳到最后" aria-controls="server-console-output" @click="scrollConsoleToEnd"><ArrowDownToLine :size="18" /></button>
           </div>
           <form class="command-bar" @submit.prevent="sendCommand">
             <span>›</span><input v-model="command" :disabled="!running" autocomplete="off" placeholder="输入服务端命令" />

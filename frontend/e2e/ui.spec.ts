@@ -21,6 +21,11 @@ const instance = {
 };
 
 async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "running") {
+  const consoleOutput = [
+    { sequence: 1, timestamp: "2026-07-12T03:15:00Z", stream: "system", text: "Starting tModLoader server" },
+    { sequence: 2, timestamp: "2026-07-12T03:15:01Z", stream: "stdout", text: "Listening on port 7777" },
+    { sequence: 3, timestamp: "2026-07-12T03:15:02Z", stream: "stdout", text: "Server started" },
+  ];
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -101,22 +106,25 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     } else if (path === "/api/v1/files" && route.request().method() === "PATCH") {
       body = { name: "renamed.zip", path: "renamed.zip", kind: "file", size: 128, modified_at: "2026-07-12T03:15:00Z", archive: true };
     } else if (path === "/api/v1/instance/console") {
-      body = [
-        { sequence: 1, timestamp: "2026-07-12T03:15:00Z", stream: "system", text: "Starting tModLoader server" },
-        { sequence: 2, timestamp: "2026-07-12T03:15:01Z", stream: "stdout", text: "Listening on port 7777" },
-        { sequence: 3, timestamp: "2026-07-12T03:15:02Z", stream: "stdout", text: "Server started" },
-      ];
+      const afterSequence = Number(url.searchParams.get("after_sequence") ?? 0);
+      body = consoleOutput.filter((entry) => entry.sequence > afterSequence);
     } else if (path.startsWith("/api/v1/logs/")) {
       body = { source: "server", path: "server/tModLoader-Logs/server.log", lines: ["Server started", "World loaded: TerraPrime"] };
     } else if (path.endsWith("/start") || path.endsWith("/stop")) body = instance.process;
     else if (path.endsWith("/console")) body = { status: "accepted" };
     await route.fulfill({ json: body });
   });
+  return { consoleOutput };
 }
 
 async function mockInstallingApi(page: Page) {
+  const provisionOutput = [
+    { sequence: 1, timestamp: "2026-07-12T00:00:00Z", stream: "system", text: "Downloading the verified tModLoader management script" },
+    { sequence: 2, timestamp: "2026-07-12T00:00:01Z", stream: "stdout", text: "Downloading version v2026.07.1.0" },
+  ];
   await page.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     let body: unknown = {};
     if (path === "/api/v1/instance") {
       body = { configured: false, instance: null, process: { state: "stopped", pid: null, started_at: null, exit_code: null } };
@@ -135,13 +143,12 @@ async function mockInstallingApi(page: Page) {
         process: null,
       };
     } else if (path === "/api/v1/provisioning/logs") {
-      body = [
-        { sequence: 1, timestamp: "2026-07-12T00:00:00Z", stream: "system", text: "Downloading the verified tModLoader management script" },
-        { sequence: 2, timestamp: "2026-07-12T00:00:01Z", stream: "stdout", text: "Downloading version v2026.07.1.0" },
-      ];
+      const afterSequence = Number(url.searchParams.get("after_sequence") ?? 0);
+      body = provisionOutput.filter((entry) => entry.sequence > afterSequence);
     }
     await route.fulfill({ json: body });
   });
+  return { provisionOutput };
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -164,11 +171,31 @@ test("unconfigured desktop is usable", async ({ page }) => {
 test("installation progress is diagnosable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await mockInstallingApi(page);
+  const { provisionOutput } = await mockInstallingApi(page);
+  for (let sequence = 3; sequence <= 40; sequence += 1) {
+    provisionOutput.push({
+      sequence,
+      timestamp: "2026-07-12T00:00:02Z",
+      stream: "stdout",
+      text: `Installation output ${sequence}`,
+    });
+  }
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   await expect(page.getByText("Downloading version v2026.07.1.0")).toBeVisible();
   await expect(page.getByRole("button", { name: "取消任务" })).toBeVisible();
+  const provisioningTerminal = page.locator("#provisioning-output");
+  await expect.poll(() => provisioningTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+  await provisioningTerminal.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(page.getByRole("button", { name: "跳到最后" })).toBeVisible();
+  provisionOutput.push({ sequence: 41, timestamp: "2026-07-12T00:00:41Z", stream: "stdout", text: "Installation output after pause" });
+  await expect(page.getByText("Installation output after pause")).toBeAttached();
+  expect(await provisioningTerminal.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "跳到最后" }).click();
+  await expect.poll(() => provisioningTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
   await page.getByLabel("主导航").getByRole("button", { name: "控制台" }).click();
   await expect(page.getByRole("heading", { name: "控制台尚未就绪" })).toBeVisible();
   await expect(page.getByText("服务器正在安装，任务会继续在后台运行。")).toBeVisible();
@@ -194,12 +221,37 @@ test("unconfigured mobile setup fits", async ({ page }) => {
 test("configured console is readable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await mockConfiguredApi(page);
+  const { consoleOutput } = await mockConfiguredApi(page);
+  for (let sequence = 4; sequence <= 80; sequence += 1) {
+    consoleOutput.push({
+      sequence,
+      timestamp: "2026-07-12T03:15:03Z",
+      stream: "stdout",
+      text: `Console output ${sequence}`,
+    });
+  }
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await page.getByLabel("主导航").getByRole("button", { name: "控制台" }).click();
   await expect(page.getByText("Listening on port 7777")).toBeVisible();
   await expect(page.getByPlaceholder("输入服务端命令")).toBeEnabled();
+  const consoleTerminal = page.locator("#server-console-output");
+  await expect.poll(() => consoleTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+  await consoleTerminal.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(page.getByRole("button", { name: "跳到最后" })).toBeVisible();
+  consoleOutput.push({ sequence: 81, timestamp: "2026-07-12T03:16:21Z", stream: "stdout", text: "Console output after pause" });
+  await page.getByTitle("刷新").click();
+  await expect(page.getByText("Console output after pause")).toBeAttached();
+  expect(await consoleTerminal.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "跳到最后" }).click();
+  await expect.poll(() => consoleTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+  consoleOutput.push({ sequence: 82, timestamp: "2026-07-12T03:16:22Z", stream: "stdout", text: "Console output while following" });
+  await page.getByTitle("刷新").click();
+  await expect(page.getByText("Console output while following")).toBeAttached();
+  await expect.poll(() => consoleTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/configured-console.png", fullPage: true });
