@@ -13,3 +13,8 @@ mods:
 
 worlds:
   max_upload_size: 536870912
+
+files:
+  max_upload_size: 2147483648
+  max_archive_entries: 10000
+  max_expanded_size: 8589934592

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import platform
 import signal
@@ -17,6 +18,8 @@ from terrapanel.domain.process import ConsoleEntry, ProcessSnapshot, ProcessStat
 from terrapanel.services.instance_service import InstanceService
 
 type CommandBuilder = Callable[[InstanceRecord], Sequence[str]]
+
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 def build_linux_launch_command(instance: InstanceRecord) -> Sequence[str]:
@@ -208,6 +211,7 @@ class ProcessManager:
             text=text,
         )
         self._history.append(entry)
+        _LOGGER.info("[server:%s] %s", stream, text)
 
         if self._console_log is not None:
             with self._console_log.open("a", encoding="utf-8") as file:

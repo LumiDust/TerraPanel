@@ -53,6 +53,22 @@ class WorldSettings(BaseModel):
     )
 
 
+class FileSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_upload_size: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=16 * 1024 * 1024 * 1024,
+    )
+    max_archive_entries: int = Field(default=10000, ge=1, le=100000)
+    max_expanded_size: int = Field(
+        default=8 * 1024 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=64 * 1024 * 1024 * 1024,
+    )
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -62,6 +78,7 @@ class Settings(BaseModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     mods: ModSettings = Field(default_factory=ModSettings)
     worlds: WorldSettings = Field(default_factory=WorldSettings)
+    files: FileSettings = Field(default_factory=FileSettings)
 
     def prepare_directories(self) -> None:
         for path in (
@@ -100,6 +117,20 @@ class _WorldOverrides(BaseModel):
     )
 
 
+class _FileOverrides(BaseModel):
+    max_upload_size: int | None = Field(
+        default=None,
+        ge=1024 * 1024,
+        le=16 * 1024 * 1024 * 1024,
+    )
+    max_archive_entries: int | None = Field(default=None, ge=1, le=100000)
+    max_expanded_size: int | None = Field(
+        default=None,
+        ge=1024 * 1024,
+        le=64 * 1024 * 1024 * 1024,
+    )
+
+
 class _EnvironmentOverrides(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TERRAPANEL_",
@@ -114,6 +145,7 @@ class _EnvironmentOverrides(BaseSettings):
     storage: _StorageOverrides = Field(default_factory=_StorageOverrides)
     mods: _ModOverrides = Field(default_factory=_ModOverrides)
     worlds: _WorldOverrides = Field(default_factory=_WorldOverrides)
+    files: _FileOverrides = Field(default_factory=_FileOverrides)
 
 
 def load_settings(config_file: str | Path | None = None) -> Settings:
@@ -163,5 +195,9 @@ def load_settings(config_file: str | Path | None = None) -> Settings:
     world_updates = overrides.worlds.model_dump(exclude_none=True)
     if world_updates:
         updates["worlds"] = settings.worlds.model_copy(update=world_updates)
+
+    file_updates = overrides.files.model_dump(exclude_none=True)
+    if file_updates:
+        updates["files"] = settings.files.model_copy(update=file_updates)
 
     return settings.model_copy(update=updates)

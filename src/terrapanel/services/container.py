@@ -5,6 +5,7 @@ from terrapanel.path_policy import PathPolicy
 from terrapanel.repository.instance_repository import InstanceRepository
 from terrapanel.repository.provision_repository import ProvisionRepository
 from terrapanel.services.backup_service import BackupService
+from terrapanel.services.file_service import FileService
 from terrapanel.services.instance_service import InstanceService
 from terrapanel.services.log_service import LogService
 from terrapanel.services.mod_service import ModService
@@ -24,6 +25,7 @@ class ServiceContainer:
     mods: ModService
     logs: LogService
     backups: BackupService
+    files: FileService
     provisioning: ProvisioningService
 
 
@@ -54,5 +56,12 @@ def build_services(settings: Settings) -> ServiceContainer:
         mods=ModService(instances, process, max_upload_size=settings.mods.max_upload_size),
         logs=LogService(instances),
         backups=BackupService(instances, process, settings.storage.backups_dir),
+        files=FileService(
+            instances,
+            process,
+            max_upload_size=settings.files.max_upload_size,
+            max_archive_entries=settings.files.max_archive_entries,
+            max_expanded_size=settings.files.max_expanded_size,
+        ),
         provisioning=provisioning,
     )

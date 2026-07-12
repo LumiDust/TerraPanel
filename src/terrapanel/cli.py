@@ -37,4 +37,5 @@ def main(argv: Sequence[str] | None = None) -> None:
         host=settings.http.bind_address,
         port=settings.http.port,
         log_level=settings.log_level,
+        access_log=False,
     )

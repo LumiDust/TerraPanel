@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections import deque
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -20,6 +21,8 @@ from terrapanel.services.instance_service import InstanceService
 from terrapanel.services.official_installer import LogEmitter
 from terrapanel.services.process_manager import ProcessManager
 from terrapanel.services.server_config_service import ServerConfigService
+
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 class Installer(Protocol):
@@ -248,6 +251,7 @@ class ProvisioningService:
                 text=text,
             )
         )
+        _LOGGER.info("[provisioning:%s] %s", stream, text)
 
     def _save(self) -> None:
         self._repository.save(self._snapshot)

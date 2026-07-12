@@ -3,14 +3,21 @@ import {
   ArchiveRestore,
   Boxes,
   Check,
+  ChevronRight,
   CircleStop,
   Download,
+  File as FileIcon,
+  FileArchive,
   FileCog,
   FileText,
+  Files,
+  Folder,
+  FolderPlus,
   FolderOpen,
   Gauge,
   HardDrive,
   PackageOpen,
+  Pencil,
   Play,
   RefreshCw,
   Rocket,
@@ -27,8 +34,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
   api,
+  type ArchivePreview,
   type BackupInfo,
   type ConsoleEntry,
+  type DirectoryListing,
+  type FileEntry as ManagedFileEntry,
   type InstanceState,
   type ModInfo,
   type ProvisionRequest,
@@ -36,7 +46,7 @@ import {
   type WorldInfo,
 } from "./api";
 
-type Tab = "overview" | "console" | "config" | "worlds" | "mods" | "backups" | "logs";
+type Tab = "overview" | "console" | "config" | "worlds" | "files" | "mods" | "backups" | "logs";
 type ModFilter = "all" | "enabled" | "disabled" | "local" | "workshop";
 
 interface PendingConfirmation {
@@ -67,6 +77,18 @@ const backupQuery = ref("");
 const worldFiles = ref<File[]>([]);
 const replaceWorld = ref(false);
 const worldFileInput = ref<HTMLInputElement | null>(null);
+const fileListing = ref<DirectoryListing | null>(null);
+const managedFiles = ref<File[]>([]);
+const managedFileInput = ref<HTMLInputElement | null>(null);
+const replaceManagedFiles = ref(false);
+const uploadProgress = ref<number | null>(null);
+const newDirectoryName = ref("");
+const movingEntry = ref<ManagedFileEntry | null>(null);
+const moveDestination = ref("");
+const replaceMoveDestination = ref(false);
+const archivePreview = ref<ArchivePreview | null>(null);
+const archiveDestination = ref("");
+const replaceArchiveFiles = ref(false);
 const modFile = ref<File | null>(null);
 const replaceMod = ref(false);
 const modFileInput = ref<HTMLInputElement | null>(null);
@@ -142,16 +164,27 @@ const filteredLogLines = computed(() => {
 });
 const recentConsole = computed(() => consoleEntries.value.slice(-6).reverse());
 const totalBackupSize = computed(() => backups.value.reduce((total, backup) => total + backup.size, 0));
+const fileBreadcrumbs = computed(() => {
+  const breadcrumbs: Array<{ label: string; path: string }> = [{ label: "根目录", path: "" }];
+  let path = "";
+  for (const segment of fileListing.value?.path.split("/").filter(Boolean) ?? []) {
+    path = path ? `${path}/${segment}` : segment;
+    breadcrumbs.push({ label: segment, path });
+  }
+  return breadcrumbs;
+});
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Gauge }> = [
   { id: "overview", label: "概览", icon: Gauge },
   { id: "console", label: "控制台", icon: SquareTerminal },
   { id: "config", label: "服务器", icon: FileCog },
   { id: "worlds", label: "存档", icon: FolderOpen },
+  { id: "files", label: "文件", icon: Files },
   { id: "mods", label: "模组", icon: Boxes },
   { id: "backups", label: "备份", icon: HardDrive },
   { id: "logs", label: "日志", icon: FileText },
 ];
+const activeTabMeta = computed(() => tabs.find((tab) => tab.id === activeTab.value) ?? tabs[0]);
 
 async function perform(action: () => Promise<unknown>) {
   busy.value = true;
@@ -215,6 +248,19 @@ async function refreshConsole() {
     await nextTick();
     consoleView.value?.scrollTo({ top: consoleView.value.scrollHeight });
   }
+}
+
+async function refreshFiles(path = fileListing.value?.path ?? "") {
+  fileListing.value = await api.files(path);
+}
+
+async function selectTab(tab: Tab) {
+  activeTab.value = tab;
+  if (tab === "files" && configured.value) await perform(() => refreshFiles());
+}
+
+function refreshCurrent() {
+  void perform(() => activeTab.value === "files" ? refreshFiles() : refreshAll());
 }
 
 async function associate() {
@@ -323,6 +369,121 @@ function deleteWorld(world: WorldInfo) {
       await api.deleteWorld(world.name);
       worlds.value = await api.worlds();
     }),
+  });
+}
+
+function managedPath(directory: string, name: string) {
+  return directory ? `${directory}/${name}` : name;
+}
+
+function selectManagedFiles(event: Event) {
+  const input = event.target as HTMLInputElement;
+  managedFiles.value = Array.from(input.files ?? []);
+}
+
+async function uploadManagedFiles() {
+  if (!managedFiles.value.length || !fileListing.value) return;
+  const directory = fileListing.value.path;
+  const selected = [...managedFiles.value];
+  await perform(async () => {
+    for (const [index, file] of selected.entries()) {
+      await api.uploadFile(
+        directory,
+        file,
+        replaceManagedFiles.value,
+        (loaded, total) => {
+          const current = total > 0 ? loaded / total : 0;
+          uploadProgress.value = Math.round(((index + current) / selected.length) * 100);
+        },
+      );
+    }
+    managedFiles.value = [];
+    uploadProgress.value = null;
+    if (managedFileInput.value) managedFileInput.value.value = "";
+    await refreshFiles(directory);
+  });
+  uploadProgress.value = null;
+}
+
+async function createManagedDirectory() {
+  const name = newDirectoryName.value.trim();
+  if (!name || !fileListing.value) return;
+  await perform(async () => {
+    await api.createDirectory(managedPath(fileListing.value?.path ?? "", name));
+    newDirectoryName.value = "";
+    await refreshFiles();
+  });
+}
+
+async function openManagedDirectory(path: string) {
+  await perform(() => refreshFiles(path));
+}
+
+function openMoveDialog(entry: ManagedFileEntry) {
+  movingEntry.value = entry;
+  moveDestination.value = entry.path;
+  replaceMoveDestination.value = false;
+}
+
+async function moveManagedEntry() {
+  const entry = movingEntry.value;
+  const destination = moveDestination.value.trim();
+  if (!entry || !destination) return;
+  await perform(async () => {
+    await api.moveFile(entry.path, destination, replaceMoveDestination.value);
+    movingEntry.value = null;
+    await refreshFiles();
+  });
+}
+
+function deleteManagedEntry(entry: ManagedFileEntry) {
+  requestConfirmation({
+    title: `删除${entry.kind === "directory" ? "目录" : "文件"} ${entry.name}`,
+    message: entry.kind === "directory"
+      ? "目录及其中的全部文件将被永久删除。"
+      : "该文件将被永久删除。",
+    confirmLabel: "删除",
+    danger: true,
+    action: () => perform(async () => {
+      await api.deleteFile(entry.path, entry.kind === "directory");
+      await refreshFiles();
+    }),
+  });
+}
+
+async function inspectManagedArchive(entry: ManagedFileEntry) {
+  const destination = fileListing.value?.path ?? "";
+  await perform(async () => {
+    archiveDestination.value = destination;
+    replaceArchiveFiles.value = false;
+    archivePreview.value = await api.inspectArchive(entry.path, destination);
+  });
+}
+
+async function refreshArchivePreview() {
+  if (!archivePreview.value) return;
+  await perform(async () => {
+    archivePreview.value = await api.inspectArchive(
+      archivePreview.value?.path ?? "",
+      archiveDestination.value.trim(),
+    );
+  });
+}
+
+async function extractManagedArchive() {
+  if (!archivePreview.value) return;
+  await perform(async () => {
+    await api.extractArchive(
+      archivePreview.value?.path ?? "",
+      archiveDestination.value.trim(),
+      replaceArchiveFiles.value,
+    );
+    archivePreview.value = null;
+    await Promise.all([
+      refreshFiles(),
+      api.mods().then((values) => { mods.value = values; }),
+      api.worlds().then((values) => { worlds.value = values; }),
+    ]);
   });
 }
 
@@ -454,7 +615,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
     <aside class="sidebar">
       <div class="brand"><Server :size="21" /><span>TerraPanel</span></div>
       <nav class="tabs" aria-label="主导航">
-        <button v-for="tab in tabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">
+        <button v-for="tab in tabs" :key="tab.id" :class="{ active: activeTab === tab.id }" @click="selectTab(tab.id)">
           <component :is="tab.icon" :size="18" /><span>{{ tab.label }}</span>
         </button>
       </nav>
@@ -466,9 +627,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
     <main>
       <header class="topbar">
-        <div><h1>{{ tabs.find((tab) => tab.id === activeTab)?.label }}</h1><p>{{ instance?.instance?.root_dir ?? "单实例管理" }}</p></div>
+        <div><h1>{{ activeTabMeta.label }}</h1><p>{{ instance?.instance?.root_dir ?? "单实例管理" }}</p></div>
         <div class="actions">
-          <button class="icon-button" title="刷新" :disabled="busy" @click="perform(refreshAll)"><RefreshCw :size="18" /></button>
+          <button class="icon-button" title="刷新" :disabled="busy" @click="refreshCurrent"><RefreshCw :size="18" /></button>
           <button v-if="configured && !running" class="icon-button" title="更新 tModLoader" :disabled="busy || provisioningRunning" @click="updateServer"><Download :size="18" /></button>
           <button v-if="configured && !running" class="primary" :disabled="busy" @click="startServer"><Play :size="17" />启动</button>
           <button v-if="configured && running" class="danger" :disabled="busy" @click="stopServer"><CircleStop :size="17" />停止</button>
@@ -477,7 +638,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
       <div v-if="error" class="error-banner">{{ error }}<button title="关闭" @click="error = ''">×</button></div>
 
-      <section v-if="!configured" class="setup-panel">
+      <section v-if="!configured && activeTab === 'overview'" class="setup-panel">
         <div class="section-heading"><Rocket :size="20" /><div><h2>新建服务器</h2><p>tModLoader Dedicated Server</p></div></div>
 
         <form class="setup-form" @submit.prevent="provisionServer">
@@ -519,6 +680,15 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <button class="secondary" :disabled="busy || provisioningRunning"><FolderOpen :size="17" />关联</button>
           </form>
         </details>
+      </section>
+
+      <section v-else-if="!configured" class="panel unavailable-panel">
+        <component :is="activeTabMeta.icon" :size="26" />
+        <div>
+          <h2>{{ activeTabMeta.label }}尚未就绪</h2>
+          <p>{{ provisioningRunning ? "服务器正在安装，任务会继续在后台运行。" : "请先完成服务器安装或关联已有安装。" }}</p>
+        </div>
+        <button class="secondary" @click="activeTab = 'overview'"><Rocket :size="17" />查看安装进度</button>
       </section>
 
       <template v-else>
@@ -613,6 +783,59 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </div>
         </section>
 
+        <section v-if="activeTab === 'files'" class="panel file-manager">
+          <div class="file-manager-header">
+            <nav class="breadcrumbs" aria-label="文件路径">
+              <template v-for="(crumb, index) in fileBreadcrumbs" :key="crumb.path">
+                <ChevronRight v-if="index" :size="14" />
+                <button :class="{ current: index === fileBreadcrumbs.length - 1 }" @click="openManagedDirectory(crumb.path)">{{ crumb.label }}</button>
+              </template>
+            </nav>
+            <span class="read-mode" :class="{ locked: running }">{{ running ? "运行中只读" : "可修改" }}</span>
+          </div>
+
+          <div class="file-actions-bar">
+            <form class="directory-form" @submit.prevent="createManagedDirectory">
+              <input v-model="newDirectoryName" :disabled="running || busy" maxlength="255" placeholder="新目录名称" />
+              <button class="secondary" :disabled="!newDirectoryName.trim() || running || busy"><FolderPlus :size="17" />新建</button>
+            </form>
+            <form class="file-upload-form" @submit.prevent="uploadManagedFiles">
+              <label class="file-picker">
+                <input ref="managedFileInput" type="file" multiple :disabled="running || busy" @change="selectManagedFiles" />
+                <span>{{ managedFiles.length ? managedFiles.map((file) => file.name).join(', ') : "选择文件或 ZIP 整合包" }}</span>
+              </label>
+              <label class="check-row"><input v-model="replaceManagedFiles" type="checkbox" :disabled="running || busy" />覆盖同名</label>
+              <button class="primary" :disabled="!managedFiles.length || running || busy"><Upload :size="17" />上传</button>
+            </form>
+          </div>
+
+          <div v-if="uploadProgress !== null" class="upload-progress" aria-live="polite">
+            <span :style="{ width: `${uploadProgress}%` }"></span><strong>{{ uploadProgress }}%</strong>
+          </div>
+
+          <div class="file-list" role="table" aria-label="服务器文件">
+            <div class="file-row file-heading" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span>操作</span></div>
+            <div v-if="fileListing?.parent !== null" class="file-row" role="row">
+              <button class="file-name" @click="openManagedDirectory(fileListing?.parent ?? '')"><Folder :size="19" /><span><strong>..</strong><small>上级目录</small></span></button>
+              <span>—</span><span>—</span><span></span>
+            </div>
+            <div v-for="entry in fileListing?.entries ?? []" :key="entry.path" class="file-row" role="row">
+              <button v-if="entry.kind === 'directory'" class="file-name" @click="openManagedDirectory(entry.path)"><Folder :size="19" /><span><strong>{{ entry.name }}</strong><small>目录</small></span></button>
+              <span v-else class="file-name"><FileArchive v-if="entry.archive" :size="19" /><FileIcon v-else :size="19" /><span><strong>{{ entry.name }}</strong><small>{{ entry.kind === 'file' ? '文件' : '不支持的类型' }}</small></span></span>
+              <span class="file-size">{{ entry.size === null ? "—" : formatBytes(entry.size) }}</span>
+              <time>{{ new Date(entry.modified_at).toLocaleString() }}</time>
+              <div class="row-actions">
+                <button v-if="entry.archive" class="icon-button" title="查看并解压" :disabled="running || busy" @click="inspectManagedArchive(entry)"><ArchiveRestore :size="17" /></button>
+                <a v-if="entry.kind === 'file'" class="icon-button" title="下载" :href="api.fileDownloadUrl(entry.path)" download><Download :size="17" /></a>
+                <button class="icon-button" title="移动或重命名" :disabled="entry.kind === 'symlink' || entry.kind === 'other' || running || busy" @click="openMoveDialog(entry)"><Pencil :size="17" /></button>
+                <button class="icon-button danger-icon" title="删除" :disabled="running || busy" @click="deleteManagedEntry(entry)"><Trash2 :size="17" /></button>
+              </div>
+            </div>
+            <div v-if="fileListing && !fileListing.entries.length" class="empty">此目录为空</div>
+            <div v-if="!fileListing" class="empty">正在读取目录</div>
+          </div>
+        </section>
+
         <section v-if="activeTab === 'mods'" class="panel management-panel">
           <div class="section-heading"><Boxes :size="20" /><div><h2>模组管理</h2><p>{{ enabledMods.length }} 启用 · {{ mods.filter((mod) => mod.source === 'local').length }} 本地 · {{ mods.filter((mod) => mod.source === 'workshop').length }} Workshop</p></div></div>
           <form class="asset-upload" @submit.prevent="uploadMod">
@@ -674,6 +897,25 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <section class="confirm-dialog" role="dialog" aria-modal="true" :aria-labelledby="'confirm-title'">
         <div><h2 id="confirm-title">{{ pendingConfirmation.title }}</h2><p>{{ pendingConfirmation.message }}</p></div>
         <div class="dialog-actions"><button class="secondary" @click="pendingConfirmation = null">取消</button><button :class="pendingConfirmation.danger ? 'danger' : 'primary'" :disabled="busy" @click="confirmPendingAction">{{ pendingConfirmation.confirmLabel }}</button></div>
+      </section>
+    </div>
+
+    <div v-if="movingEntry" class="modal-backdrop" role="presentation" @click.self="movingEntry = null">
+      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="move-title">
+        <div><h2 id="move-title">移动或重命名</h2><p>{{ movingEntry.path }}</p></div>
+        <label class="dialog-field">目标路径<input v-model="moveDestination" maxlength="1024" /></label>
+        <label class="check-row"><input v-model="replaceMoveDestination" type="checkbox" />覆盖同名文件</label>
+        <div class="dialog-actions"><button class="secondary" @click="movingEntry = null">取消</button><button class="primary" :disabled="busy || !moveDestination.trim()" @click="moveManagedEntry">保存</button></div>
+      </section>
+    </div>
+
+    <div v-if="archivePreview" class="modal-backdrop" role="presentation" @click.self="archivePreview = null">
+      <section class="confirm-dialog archive-dialog" role="dialog" aria-modal="true" aria-labelledby="archive-title">
+        <div><h2 id="archive-title">解压 {{ archivePreview.path }}</h2><p>{{ archivePreview.files }} 个文件 · {{ formatBytes(archivePreview.expanded_size) }} 解压后大小</p></div>
+        <dl class="archive-summary"><dt>顶层目录</dt><dd>{{ archivePreview.top_level.join(', ') || '无' }}</dd><dt>已有冲突</dt><dd>{{ archivePreview.conflicts.length }}</dd></dl>
+        <label class="dialog-field">目标目录（实例根留空）<input v-model="archiveDestination" maxlength="1024" placeholder="根目录" @change="refreshArchivePreview" /></label>
+        <label class="check-row"><input v-model="replaceArchiveFiles" type="checkbox" :disabled="!archivePreview.conflicts.length" />覆盖已有文件</label>
+        <div class="dialog-actions"><button class="secondary" @click="archivePreview = null">取消</button><button class="primary" :disabled="busy || (archivePreview.conflicts.length > 0 && !replaceArchiveFiles)" @click="extractManagedArchive"><ArchiveRestore :size="17" />解压</button></div>
       </section>
     </div>
   </div>

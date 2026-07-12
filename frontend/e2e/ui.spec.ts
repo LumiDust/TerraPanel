@@ -64,6 +64,42 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       body = [
         { id: "20260712T031500000000Z-manual", created_at: "2026-07-12T03:15:00Z", size: 7340032, world_files: 1 },
       ];
+    } else if (path === "/api/v1/files" && route.request().method() === "GET") {
+      const directory = url.searchParams.get("path") ?? "";
+      body = directory === "Mods"
+        ? {
+            path: "Mods",
+            parent: "",
+            entries: [
+              { name: "enabled.json", path: "Mods/enabled.json", kind: "file", size: 128, modified_at: "2026-07-12T03:15:00Z", archive: false },
+              { name: "ExampleMod.tmod", path: "Mods/ExampleMod.tmod", kind: "file", size: 880000, modified_at: "2026-07-12T03:15:00Z", archive: false },
+            ],
+          }
+        : {
+            path: "",
+            parent: null,
+            entries: [
+              { name: "ModConfigs", path: "ModConfigs", kind: "directory", size: null, modified_at: "2026-07-12T03:15:00Z", archive: false },
+              { name: "Mods", path: "Mods", kind: "directory", size: null, modified_at: "2026-07-12T03:15:00Z", archive: false },
+              { name: "SaveData.zip", path: "SaveData.zip", kind: "file", size: 714222878, modified_at: "2026-07-12T03:15:00Z", archive: true },
+            ],
+          };
+    } else if (path === "/api/v1/files/upload") {
+      body = { name: "Pack.zip", path: "Pack.zip", kind: "file", size: 128, modified_at: "2026-07-12T03:15:00Z", archive: true };
+    } else if (path === "/api/v1/files/archive") {
+      body = {
+        path: "SaveData.zip",
+        files: 32,
+        directories: 2,
+        expanded_size: 732785449,
+        compressed_size: 714217434,
+        top_level: ["ModConfigs", "Mods"],
+        conflicts: ["Mods/enabled.json"],
+      };
+    } else if (path === "/api/v1/files/archive/extract") {
+      body = { destination: "", files: 32, directories: 2, bytes_written: 732785449 };
+    } else if (path === "/api/v1/files" && route.request().method() === "PATCH") {
+      body = { name: "renamed.zip", path: "renamed.zip", kind: "file", size: 128, modified_at: "2026-07-12T03:15:00Z", archive: true };
     } else if (path === "/api/v1/instance/console") {
       body = [
         { sequence: 1, timestamp: "2026-07-12T03:15:00Z", stream: "system", text: "Starting tModLoader server" },
@@ -133,6 +169,11 @@ test("installation progress is diagnosable", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Downloading version v2026.07.1.0")).toBeVisible();
   await expect(page.getByRole("button", { name: "取消任务" })).toBeVisible();
+  await page.getByLabel("主导航").getByRole("button", { name: "控制台" }).click();
+  await expect(page.getByRole("heading", { name: "控制台尚未就绪" })).toBeVisible();
+  await expect(page.getByText("服务器正在安装，任务会继续在后台运行。")).toBeVisible();
+  await page.getByRole("button", { name: "查看安装进度" }).click();
+  await expect(page.getByText("Downloading version v2026.07.1.0")).toBeVisible();
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/installing-desktop.png", fullPage: true });
@@ -304,4 +345,60 @@ test("world save management fits mobile", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/worlds-mobile.png", fullPage: true });
+});
+
+test("file manager handles save data archives", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "文件" }).click();
+  await expect(page.getByText("SaveData.zip")).toBeVisible();
+  await expect(page.getByText("681.1 MB")).toBeVisible();
+
+  await page.getByRole("button", { name: "Mods" }).click();
+  await expect(page.getByText("enabled.json")).toBeVisible();
+  await page.getByLabel("文件路径").getByRole("button", { name: "根目录" }).click();
+
+  const uploadRequest = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/files/upload") && request.method() === "POST",
+  );
+  await page.locator('.file-upload-form input[type="file"]').setInputFiles({
+    name: "Pack.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("ZIP"),
+  });
+  await page.getByRole("button", { name: "上传" }).click();
+  await uploadRequest;
+
+  await page.getByTitle("查看并解压").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "解压 SaveData.zip" })).toBeVisible();
+  await expect(dialog.getByText("ModConfigs, Mods")).toBeVisible();
+  await dialog.getByRole("checkbox", { name: "覆盖已有文件" }).check();
+  const extraction = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/files/archive/extract") && request.method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "解压" }).click();
+  await extraction;
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/files-desktop.png", fullPage: true });
+});
+
+test("file manager is readable and locked on mobile while running", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "running");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "文件" }).click();
+  await expect(page.getByText("运行中只读")).toBeVisible();
+  await expect(page.getByRole("button", { name: "上传" })).toBeDisabled();
+  await expect(page.getByTitle("查看并解压")).toBeDisabled();
+  await expect(page.getByTitle("下载")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/files-mobile.png", fullPage: true });
 });

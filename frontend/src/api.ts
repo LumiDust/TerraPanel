@@ -37,6 +37,38 @@ export interface WorldInfo {
   selected: boolean;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory" | "symlink" | "other";
+  size: number | null;
+  modified_at: string;
+  archive: boolean;
+}
+
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  entries: FileEntry[];
+}
+
+export interface ArchivePreview {
+  path: string;
+  files: number;
+  directories: number;
+  expanded_size: number;
+  compressed_size: number;
+  top_level: string[];
+  conflicts: string[];
+}
+
+export interface ArchiveExtractResult {
+  destination: string;
+  files: number;
+  directories: number;
+  bytes_written: number;
+}
+
 export interface ModInfo {
   name: string;
   source: "local" | "workshop";
@@ -168,6 +200,64 @@ export const api = {
   },
   deleteWorld: (name: string) =>
     request<string[]>(`/worlds/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  files: (path = "") =>
+    request<DirectoryListing>(`/files?${new URLSearchParams({ path })}`),
+  createDirectory: (path: string) =>
+    request<FileEntry>("/files/directories", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  uploadFile: (
+    directory: string,
+    file: File,
+    replace = false,
+    onProgress?: (loaded: number, total: number) => void,
+  ) => new Promise<FileEntry>((resolve, reject) => {
+    const query = new URLSearchParams({
+      directory,
+      filename: file.name,
+      replace: String(replace),
+    });
+    const upload = new XMLHttpRequest();
+    upload.open("POST", `/api/v1/files/upload?${query}`);
+    upload.responseType = "json";
+    upload.upload.onprogress = (event) => {
+      onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
+    };
+    upload.onerror = () => reject(new Error("File upload failed"));
+    upload.onload = () => {
+      const payload = upload.response as FileEntry | { detail?: string } | null;
+      if (upload.status >= 200 && upload.status < 300 && payload) {
+        resolve(payload as FileEntry);
+      } else {
+        reject(new Error(
+          (payload as { detail?: string } | null)?.detail
+            ?? `Request failed (${upload.status})`,
+        ));
+      }
+    };
+    upload.send(file);
+  }),
+  moveFile: (source: string, destination: string, replace = false) =>
+    request<FileEntry>("/files", {
+      method: "PATCH",
+      body: JSON.stringify({ source, destination, replace }),
+    }),
+  deleteFile: (path: string, recursive = false) =>
+    request<void>(`/files?${new URLSearchParams({ path, recursive: String(recursive) })}`, {
+      method: "DELETE",
+    }),
+  fileDownloadUrl: (path: string) =>
+    `/api/v1/files/download?${new URLSearchParams({ path })}`,
+  inspectArchive: (path: string, destination = "") =>
+    request<ArchivePreview>(
+      `/files/archive?${new URLSearchParams({ path, destination })}`,
+    ),
+  extractArchive: (path: string, destination = "", replace = false) =>
+    request<ArchiveExtractResult>("/files/archive/extract", {
+      method: "POST",
+      body: JSON.stringify({ path, destination, replace }),
+    }),
   mods: () => request<ModInfo[]>("/mods"),
   toggleMod: (name: string, enabled: boolean) =>
     request<string[]>(`/mods/${enabled ? "enable" : "disable"}`, {
