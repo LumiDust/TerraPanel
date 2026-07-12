@@ -123,8 +123,23 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ## Docker
 
+从 GitHub Container Registry 拉取最新的 Linux x86_64 镜像并启动：
+
 ```bash
-docker compose up --build
+docker compose pull
+docker compose up -d --no-build
+```
+
+也可以固定到版本标签，避免后续自动切换版本：
+
+```bash
+TERRAPANEL_IMAGE=ghcr.io/lumidust/terrapanel:0.1.0 docker compose up -d --no-build
+```
+
+本地修改源码后需要自行构建时，覆盖镜像名并启用构建：
+
+```bash
+TERRAPANEL_IMAGE=terrapanel:dev docker compose up -d --build
 ```
 
 使用离线镜像归档时，先校验并加载镜像，再通过 Compose 启动：
@@ -134,6 +149,16 @@ sha256sum --check terrapanel-0.1.0-linux-amd64.tar.sha256
 docker load --input terrapanel-0.1.0-linux-amd64.tar
 TERRAPANEL_IMAGE=terrapanel:0.1.0 docker compose up -d --no-build
 ```
+
+仓库中的 GitHub Actions 会自动构建并发布 `linux/amd64` 镜像到 GHCR：
+
+| Git 事件 | 发布标签 |
+|----------|----------|
+| 推送到 `main` | `latest`、`sha-<短提交号>` |
+| 推送 `v0.1.0` 形式的版本标签 | `0.1.0`、`0.1`、`0`、`sha-<短提交号>` |
+| 手动运行工作流 | 当前分支对应的 SHA 标签；`main` 同时更新 `latest` |
+
+首次发布后，仓库所有者需要在 GitHub Packages 中把容器包可见性设为 Public，公开用户才能免登录拉取。包保持私有时，需要先使用具有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
 
 容器默认只在宿主机 `127.0.0.1:8080` 发布面板端口，并把宿主机 Terraria `7777` 映射到容器 `7777`；运行数据和自动安装的服务器保存在 `terrapanel-data` 数据卷。`TERRAPANEL_GAME_PORT` 控制宿主机端口，`TERRAPANEL_SERVER_PORT` 必须与安装向导中的服务器端口一致，两者默认都是 `7777`。
 

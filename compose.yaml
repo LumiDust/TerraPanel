@@ -1,6 +1,6 @@
 services:
   terrapanel:
-    image: "${TERRAPANEL_IMAGE:-terrapanel:0.1.0}"
+    image: "${TERRAPANEL_IMAGE:-ghcr.io/lumidust/terrapanel:latest}"
     build: .
     restart: unless-stopped
     ports:
