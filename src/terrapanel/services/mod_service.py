@@ -3,6 +3,7 @@ import json
 import os
 import re
 import struct
+from contextlib import suppress
 from dataclasses import dataclass
 from io import BufferedIOBase
 from pathlib import Path
@@ -113,6 +114,34 @@ class ModService:
             size=size,
             enabled=metadata.name in self.enabled_names(),
         )
+
+    def delete_local(self, name: str) -> None:
+        if self._process.snapshot().state not in {ProcessState.STOPPED, ProcessState.FAILED}:
+            raise ConflictError("Stop the tModLoader server before deleting a mod")
+        if not _INTERNAL_NAME_PATTERN.fullmatch(name):
+            raise DomainValidationError("The mod name is not supported")
+
+        local = next(
+            (mod for mod in self.list() if mod.source == "local" and mod.name == name),
+            None,
+        )
+        if local is None:
+            raise ResourceNotFoundError(f"Local mod is not installed: {name}")
+
+        target = self._instances.resolve_in_root(local.file, must_exist=True)
+        temporary = target.with_name(f".delete-{uuid4().hex}.tmp")
+        original_enabled = self.enabled_names()
+        updated_enabled = original_enabled - {name}
+        os.replace(target, temporary)
+        try:
+            self._write_enabled(updated_enabled)
+            temporary.unlink()
+        except Exception:
+            if temporary.exists():
+                os.replace(temporary, target)
+            with suppress(Exception):
+                self._write_enabled(original_enabled)
+            raise
 
     def enabled_names(self) -> set[str]:
         return self._read_enabled(self._instances.resolve_in_root("Mods/enabled.json"))

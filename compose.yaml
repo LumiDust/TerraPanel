@@ -7,7 +7,7 @@ services:
       - "127.0.0.1:${TERRAPANEL_WEB_PORT:-8080}:8080"
       - "${TERRAPANEL_GAME_PORT:-7777}:${TERRAPANEL_SERVER_PORT:-7777}"
     volumes:
-      - "${TERRAPANEL_DATA_PATH:-terrapanel-data}:/var/lib/terrapanel"
+      - "${TERRAPANEL_DATA_PATH:-terrapanel-data}:/data"
 
 volumes:
   terrapanel-data:

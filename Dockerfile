@@ -24,7 +24,7 @@ RUN dpkg --add-architecture i386 \
         unzip \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 terrapanel \
-    && useradd --uid 10001 --gid terrapanel --home-dir /var/lib/terrapanel --system terrapanel
+    && useradd --uid 10001 --gid terrapanel --home-dir /home/terrapanel --create-home --system terrapanel
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
@@ -33,20 +33,18 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     TERRAPANEL_ENVIRONMENT=production \
     TERRAPANEL_HTTP__BIND_ADDRESS=0.0.0.0 \
-    TERRAPANEL_STORAGE__DATA_DIR=/var/lib/terrapanel \
-    TERRAPANEL_STORAGE__SERVERS_DIR=/var/lib/terrapanel/servers \
-    TERRAPANEL_STORAGE__BACKUPS_DIR=/var/lib/terrapanel/backups
+    TERRAPANEL_STORAGE__ROOT_DIR=/data
 
 COPY pyproject.toml uv.lock README.md .python-version ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 RUN uv sync --frozen --no-dev \
-    && mkdir -p /var/lib/terrapanel/servers /var/lib/terrapanel/backups \
-    && chown -R terrapanel:terrapanel /var/lib/terrapanel
+    && mkdir -p /data/servers /data/backups \
+    && chown -R terrapanel:terrapanel /data
 
 USER terrapanel
-VOLUME ["/var/lib/terrapanel"]
+VOLUME ["/data"]
 EXPOSE 8080 7777
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 \

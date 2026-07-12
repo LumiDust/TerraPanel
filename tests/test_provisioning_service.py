@@ -12,6 +12,7 @@ from terrapanel.domain.errors import ConflictError, DomainValidationError
 from terrapanel.domain.provisioning import (
     ProvisionRequest,
     ProvisionSnapshot,
+    ProvisionStage,
     ProvisionState,
     UpdateRequest,
 )
@@ -181,6 +182,45 @@ def test_persists_failed_task(
         repository,
     )
     assert restored.snapshot().state is ProvisionState.FAILED
+
+
+def test_restores_snapshot_with_current_instance_paths(
+    app_settings: Settings,
+    services: ServiceContainer,
+    instance_root: Path,
+) -> None:
+    current = services.instances.require()
+    legacy_root = Path("/var/lib/terrapanel/servers/primary")
+    legacy = current.model_copy(
+        update={
+            "root_dir": legacy_root,
+            "install_dir": legacy_root / "server",
+            "launch_script": legacy_root / "server" / "start-tModLoaderServer.sh",
+            "config_file": legacy_root / "serverconfig.txt",
+        }
+    )
+    repository = ProvisionRepository(app_settings.storage.data_dir / "restored-paths.json")
+    repository.save(
+        ProvisionSnapshot(
+            state=ProvisionState.SUCCEEDED,
+            stage=ProvisionStage.COMPLETE,
+            operation="install",
+            root_dir=legacy_root.as_posix(),
+            instance=legacy,
+        )
+    )
+
+    restored = ProvisioningService(
+        services.instances,
+        services.server_config,
+        services.process,
+        _FailingInstaller(),
+        repository,
+    )
+
+    assert restored.snapshot().instance == current
+    assert restored.snapshot().root_dir == str(instance_root.resolve())
+    assert repository.get() == restored.snapshot()
 
 
 def test_updates_existing_instance(

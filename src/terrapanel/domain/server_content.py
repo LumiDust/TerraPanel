@@ -42,6 +42,7 @@ class WorldInfo(BaseModel):
     has_mod_data: bool
     size: int
     modified_at: datetime
+    selected: bool
 
 
 class WorldSelection(BaseModel):

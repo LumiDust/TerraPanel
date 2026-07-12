@@ -53,3 +53,37 @@ def test_enables_and_disables_local_mod(instance_root: Path, services: ServiceCo
 def test_rejects_enabling_missing_mod(instance_root: Path, services: ServiceContainer) -> None:
     with pytest.raises(ResourceNotFoundError):
         services.mods.enable("MissingMod")
+
+
+def test_deletes_local_mod_and_removes_it_from_enabled_list(
+    instance_root: Path, services: ServiceContainer
+) -> None:
+    mod = instance_root / "Mods" / "ExampleMod.tmod"
+    mod.write_bytes(b"mod")
+    services.mods.enable("ExampleMod")
+
+    services.mods.delete_local("ExampleMod")
+
+    assert not mod.exists()
+    assert services.mods.enabled_names() == set()
+
+
+def test_rejects_deleting_workshop_mod(
+    instance_root: Path, services: ServiceContainer
+) -> None:
+    workshop = (
+        instance_root
+        / "steamapps"
+        / "workshop"
+        / "content"
+        / "1281930"
+        / "123"
+        / "WorkshopOnly.tmod"
+    )
+    workshop.parent.mkdir(parents=True)
+    workshop.write_bytes(b"mod")
+
+    with pytest.raises(ResourceNotFoundError, match="Local mod"):
+        services.mods.delete_local("WorkshopOnly")
+
+    assert workshop.is_file()

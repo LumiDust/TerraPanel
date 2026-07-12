@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from terrapanel.config import Settings
-from terrapanel.domain.errors import DomainValidationError
+from terrapanel.domain.errors import DomainValidationError, ResourceNotFoundError
 from terrapanel.services.container import ServiceContainer
 
 
@@ -30,6 +30,23 @@ def test_backup_and_restore_round_trip(
     assert world.read_bytes() == b"original world"
     assert mod_world.read_bytes() == b"original mod world"
     assert "ExampleMod" in (instance_root / "Mods" / "enabled.json").read_text()
+
+
+def test_resolves_and_deletes_backup_archive(
+    instance_root: Path,
+    services: ServiceContainer,
+) -> None:
+    (instance_root / "Worlds" / "Example.wld").write_bytes(b"world")
+    backup = services.backups.create("managed")
+    archive = services.backups.archive_path(backup.id)
+
+    assert archive.is_file()
+
+    services.backups.delete(backup.id)
+
+    assert not archive.exists()
+    with pytest.raises(ResourceNotFoundError):
+        services.backups.archive_path(backup.id)
 
 
 def test_rejects_zip_slip_backup(

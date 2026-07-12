@@ -111,17 +111,7 @@ class BackupService:
 
     def restore(self, backup_id: str) -> BackupInfo:
         self._require_stopped()
-        if not backup_id or any(
-            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-            for character in backup_id
-        ):
-            raise DomainValidationError("Invalid backup identifier")
-
-        archive_path = self._backups_dir / f"{backup_id}.zip"
-        if archive_path.is_symlink() or archive_path.is_junction():
-            raise DomainValidationError(f"Backup path cannot be a link: {backup_id}")
-        if not archive_path.is_file():
-            raise ResourceNotFoundError(f"Backup does not exist: {backup_id}")
+        archive_path = self.archive_path(backup_id)
 
         instance = self._instances.require()
         with tempfile.TemporaryDirectory(
@@ -163,6 +153,27 @@ class BackupService:
                     shutil.rmtree(previous_worlds)
 
         return next(backup for backup in self.list() if backup.id == backup_id)
+
+    def archive_path(self, backup_id: str) -> Path:
+        if not backup_id or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+            for character in backup_id
+        ):
+            raise DomainValidationError("Invalid backup identifier")
+
+        archive_path = self._backups_dir / f"{backup_id}.zip"
+        if archive_path.is_symlink() or archive_path.is_junction():
+            raise DomainValidationError(f"Backup path cannot be a link: {backup_id}")
+        if not archive_path.is_file():
+            raise ResourceNotFoundError(f"Backup does not exist: {backup_id}")
+        return archive_path
+
+    def delete(self, backup_id: str) -> None:
+        archive_path = self.archive_path(backup_id)
+        try:
+            archive_path.unlink()
+        except OSError as error:
+            raise DomainValidationError(f"Cannot delete backup {backup_id}: {error}") from error
 
     def _extract_validated(self, archive: zipfile.ZipFile, destination: Path) -> None:
         for item in archive.infolist():

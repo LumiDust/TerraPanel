@@ -256,9 +256,10 @@ class ProvisioningService:
         stored = self._repository.get()
         if stored is None:
             return ProvisionSnapshot()
+        updates: dict[str, object] = {}
         if stored.state is ProvisionState.RUNNING:
-            stored = stored.model_copy(
-                update={
+            updates.update(
+                {
                     "state": ProvisionState.FAILED,
                     "finished_at": datetime.now(UTC),
                     "error": (
@@ -266,5 +267,18 @@ class ProvisioningService:
                     ),
                 }
             )
+
+        current_instance = self._instances.get()
+        if (
+            stored.instance is not None
+            and current_instance is not None
+            and stored.instance != current_instance
+        ):
+            updates["instance"] = current_instance
+            if stored.root_dir is not None:
+                updates["root_dir"] = str(current_instance.root_dir)
+
+        if updates:
+            stored = stored.model_copy(update=updates)
             self._repository.save(stored)
         return stored

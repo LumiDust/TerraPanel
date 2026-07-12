@@ -61,6 +61,89 @@ def test_rejects_tampered_persisted_paths(
         services.instances.require()
 
 
+def test_migrates_legacy_container_paths(
+    app_settings: Settings,
+    services: ServiceContainer,
+    instance_root: Path,
+) -> None:
+    original = services.instances.require()
+    world = instance_root / "Worlds" / "Legacy.wld"
+    world.write_bytes(b"world")
+    original.config_file.write_text(
+        "# preserved\n"
+        "world=/var/lib/terrapanel/servers/primary/Worlds/Legacy.wld\n"
+        "customsetting=preserved\n",
+        encoding="utf-8",
+    )
+    metadata_file = app_settings.storage.data_dir / "instance.json"
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    legacy_root = "/var/lib/terrapanel/servers/primary"
+    metadata.update(
+        {
+            "root_dir": legacy_root,
+            "install_dir": f"{legacy_root}/server",
+            "launch_script": f"{legacy_root}/server/start-tModLoaderServer.sh",
+            "config_file": f"{legacy_root}/serverconfig.txt",
+        }
+    )
+    metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+
+    migrated = services.instances.require()
+
+    assert migrated.root_dir == instance_root.resolve()
+    assert migrated.created_at == original.created_at
+    assert migrated.updated_at > original.updated_at
+    assert migrated.config_file.read_text(encoding="utf-8") == (
+        "# preserved\n"
+        f"world={world.resolve()}\n"
+        "customsetting=preserved\n"
+    )
+    persisted = json.loads(metadata_file.read_text(encoding="utf-8"))
+    assert persisted["root_dir"] == str(instance_root.resolve())
+
+
+def test_migrates_legacy_world_setting_after_instance_metadata(
+    services: ServiceContainer,
+    instance_root: Path,
+) -> None:
+    instance = services.instances.require()
+    world = instance_root / "Worlds" / "PartiallyMigrated.wld"
+    world.write_bytes(b"world")
+    instance.config_file.write_text(
+        "world=/var/lib/terrapanel/servers/primary/Worlds/PartiallyMigrated.wld\n",
+        encoding="utf-8",
+    )
+
+    current = services.instances.require()
+
+    assert current == instance
+    assert current.config_file.read_text(encoding="utf-8") == f"world={world.resolve()}\n"
+
+
+def test_rejects_tampered_legacy_container_paths(
+    app_settings: Settings,
+    services: ServiceContainer,
+    instance_root: Path,
+) -> None:
+    metadata_file = app_settings.storage.data_dir / "instance.json"
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    legacy_root = "/var/lib/terrapanel/servers/primary"
+    metadata.update(
+        {
+            "root_dir": legacy_root,
+            "install_dir": f"{legacy_root}/server",
+            "launch_script": f"{legacy_root}/server/start-tModLoaderServer.sh",
+            "config_file": f"{legacy_root}/../outside.txt",
+        }
+    )
+    metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(DomainValidationError, match="legacy server directory"):
+        services.instances.require()
+
+    assert instance_root.is_dir()
+
+
 def test_rejects_managed_directory_symlink(
     tmp_path: Path,
     app_settings: Settings,

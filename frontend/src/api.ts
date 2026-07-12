@@ -34,6 +34,7 @@ export interface WorldInfo {
   has_mod_data: boolean;
   size: number;
   modified_at: string;
+  selected: boolean;
 }
 
 export interface ModInfo {
@@ -160,6 +161,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+  uploadWorld: (files: File[], replace = false) => {
+    const body = new FormData();
+    for (const file of files) body.append("files", file);
+    return request<WorldInfo>(`/worlds/upload?replace=${replace}`, { method: "POST", body });
+  },
+  deleteWorld: (name: string) =>
+    request<string[]>(`/worlds/${encodeURIComponent(name)}`, { method: "DELETE" }),
   mods: () => request<ModInfo[]>("/mods"),
   toggleMod: (name: string, enabled: boolean) =>
     request<string[]>(`/mods/${enabled ? "enable" : "disable"}`, {
@@ -171,6 +179,8 @@ export const api = {
     body.append("file", file);
     return request<ModInfo>(`/mods/upload?replace=${replace}`, { method: "POST", body });
   },
+  deleteLocalMod: (name: string) =>
+    request<void>(`/mods/local/${encodeURIComponent(name)}`, { method: "DELETE" }),
   backups: () => request<BackupInfo[]>("/backups"),
   createBackup: (label?: string) =>
     request<BackupInfo>("/backups", {
@@ -179,5 +189,9 @@ export const api = {
     }),
   restoreBackup: (id: string) =>
     request<BackupInfo>(`/backups/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+  backupDownloadUrl: (id: string) =>
+    `/api/v1/backups/${encodeURIComponent(id)}/download`,
+  deleteBackup: (id: string) =>
+    request<void>(`/backups/${encodeURIComponent(id)}`, { method: "DELETE" }),
   log: (source: string) => request<LogView>(`/logs/${source}?lines=500`),
 };

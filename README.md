@@ -27,7 +27,7 @@ scripts/                 Linux 启动与维护脚本
 
 ## 实例目录
 
-新实例会在配置的 `storage.servers_dir` 内自动创建。最终目录遵循 tModLoader DedicatedServerUtils 使用的结构：
+新实例会在 `storage.root_dir/servers` 内自动创建，实例目录名可在安装向导中修改。最终目录遵循 tModLoader DedicatedServerUtils 使用的结构：
 
 ```text
 primary/
@@ -73,7 +73,14 @@ curl -X POST http://127.0.0.1:8080/api/v1/provisioning \
 
 自动安装需要宿主机提供 `bash`、`curl`、`tar` 和 `unzip`。Docker 镜像已经包含这些系统工具及 SteamCMD 所需的 32 位运行库；Linux 裸机启动时若缺少工具，任务日志会列出缺失项。面板不会从 Web 进程提权执行 `apt`、`dnf` 等系统包管理器。
 
-环境变量使用 `TERRAPANEL_` 前缀和双下划线表示嵌套字段，例如 `TERRAPANEL_HTTP__PORT=8081`、`TERRAPANEL_STORAGE__SERVERS_DIR=/srv/tmodloader`。`.tmod` 上传上限默认是 256 MiB，可通过 `TERRAPANEL_MODS__MAX_UPLOAD_SIZE` 按字节覆盖。
+裸机运行时只需修改一个根目录，面板状态、服务端、世界、模组、Workshop、日志和备份都会随之移动：
+
+```yaml
+storage:
+  root_dir: /srv/terrapanel
+```
+
+环境变量使用 `TERRAPANEL_` 前缀和双下划线表示嵌套字段，例如 `TERRAPANEL_HTTP__PORT=8081`、`TERRAPANEL_STORAGE__ROOT_DIR=/srv/terrapanel`。旧的 `data_dir`、`servers_dir` 和 `backups_dir` 仍可用于分别覆盖目录。`.tmod` 上传上限默认是 256 MiB，可通过 `TERRAPANEL_MODS__MAX_UPLOAD_SIZE` 按字节覆盖；世界存档上传总上限默认是 512 MiB，可通过 `TERRAPANEL_WORLDS__MAX_UPLOAD_SIZE` 调整。
 
 ## API
 
@@ -81,16 +88,16 @@ curl -X POST http://127.0.0.1:8080/api/v1/provisioning \
 
 | 功能 | 接口 |
 |------|------|
-| 健康检查 | `GET /health` |
+| 健康检查 | `GET /api/v1/health` |
 | 安装与更新 | `GET/POST /provisioning`、`POST /provisioning/update`、`POST /provisioning/cancel`、`GET /provisioning/logs` |
 | 实例关联与移除 | `GET/PUT/DELETE /instance` |
 | 生命周期 | `POST /instance/start`、`POST /instance/stop`、`GET /instance/status` |
 | 控制台 | `GET/POST /instance/console` |
 | 服务配置 | `GET/PATCH /server-config` |
-| 世界 | `GET /worlds`、`POST /worlds/select` |
-| 模组 | `GET /mods`、`POST /mods/upload`、`POST /mods/enable`、`POST /mods/disable` |
+| 世界存档 | `GET /worlds`、`POST /worlds/upload`、`POST /worlds/select`、`DELETE /worlds/{name}` |
+| 模组 | `GET /mods`、`POST /mods/upload`、`POST /mods/enable`、`POST /mods/disable`、`DELETE /mods/local/{name}` |
 | 日志 | `GET /logs/{console\|server\|launch\|native}` |
-| 备份 | `GET/POST /backups`、`POST /backups/{id}/restore` |
+| 备份 | `GET/POST /backups`、`GET /backups/{id}/download`、`POST /backups/{id}/restore`、`DELETE /backups/{id}` |
 
 完整请求模型和响应模型见运行中的 `/docs`。
 
@@ -99,6 +106,19 @@ curl -X POST http://127.0.0.1:8080/api/v1/provisioning \
 ```bash
 curl -F 'file=@ExampleMod.tmod' http://127.0.0.1:8080/api/v1/mods/upload
 curl -F 'file=@ExampleMod.tmod' 'http://127.0.0.1:8080/api/v1/mods/upload?replace=true'
+curl -X DELETE http://127.0.0.1:8080/api/v1/mods/local/ExampleMod
+```
+
+删除接口只处理本地上传的 `.tmod`，并同步清理 `enabled.json`；Workshop 模组仍由其订阅和更新流程管理。
+
+“存档”页面支持导入一个 `.wld` 和可选的同名 `.twld`、切换当前世界及删除非当前世界。导入不会自动切换当前世界；覆盖导入会把 `.wld/.twld` 作为一组替换。删除会清理同名主文件和直接 `.bak` 伴随文件，但保留 `Worlds/Backups` 中的历史 ZIP：
+
+```bash
+curl -F 'files=@Example.wld' -F 'files=@Example.twld' \
+  http://127.0.0.1:8080/api/v1/worlds/upload
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"Worlds/Example.wld"}' \
+  http://127.0.0.1:8080/api/v1/worlds/select
 ```
 
 ## Docker
@@ -117,19 +137,19 @@ TERRAPANEL_IMAGE=terrapanel:0.1.0 docker compose up -d --no-build
 
 容器默认只在宿主机 `127.0.0.1:8080` 发布面板端口，并把宿主机 Terraria `7777` 映射到容器 `7777`；运行数据和自动安装的服务器保存在 `terrapanel-data` 数据卷。`TERRAPANEL_GAME_PORT` 控制宿主机端口，`TERRAPANEL_SERVER_PORT` 必须与安装向导中的服务器端口一致，两者默认都是 `7777`。
 
-数据在容器内使用固定布局，其中 `<实例目录>` 默认为 `primary`：
+所有持久化文件都集中在独立容器目录 `/data`，不写入 `/var`。其中 `<实例目录>` 默认为 `primary`：
 
 | 数据 | 容器路径 |
 |------|----------|
-| 面板状态 | `/var/lib/terrapanel/instance.json`、`/var/lib/terrapanel/provisioning.json` |
-| 服务端实例 | `/var/lib/terrapanel/servers/<实例目录>/server` |
-| 世界存档 | `/var/lib/terrapanel/servers/<实例目录>/Worlds` |
-| 本地模组与启用列表 | `/var/lib/terrapanel/servers/<实例目录>/Mods` |
-| Workshop 内容 | `/var/lib/terrapanel/servers/<实例目录>/steamapps` |
-| 日志 | `/var/lib/terrapanel/servers/<实例目录>/logs` |
-| 备份 | `/var/lib/terrapanel/backups` |
+| 面板状态 | `/data/instance.json`、`/data/provisioning.json` |
+| 服务端实例 | `/data/servers/<实例目录>/server` |
+| 世界存档 | `/data/servers/<实例目录>/Worlds` |
+| 本地模组与启用列表 | `/data/servers/<实例目录>/Mods` |
+| Workshop 内容 | `/data/servers/<实例目录>/steamapps` |
+| 日志 | `/data/servers/<实例目录>/logs` |
+| 备份 | `/data/backups` |
 
-设置 `TERRAPANEL_DATA_PATH` 可以把整个固定布局绑定到宿主目录，而不改变容器内路径：
+设置 `TERRAPANEL_DATA_PATH` 可以把整个固定布局绑定到宿主目录 `/data`：
 
 ```bash
 mkdir -p ./terrapanel-data
@@ -137,7 +157,7 @@ sudo chown -R 10001:10001 ./terrapanel-data
 TERRAPANEL_DATA_PATH=./terrapanel-data docker compose up -d --build
 ```
 
-容器以 `10001:10001` 运行，宿主目录必须允许该用户读写。未设置 `TERRAPANEL_DATA_PATH` 时继续使用原有 `terrapanel-data` 命名卷。
+容器以 `10001:10001` 运行，宿主目录必须允许该用户读写。未设置 `TERRAPANEL_DATA_PATH` 时继续使用原有 `terrapanel-data` 命名卷；旧版本卷中的文件结构不变，只是容器内挂载点从 `/var/lib/terrapanel` 调整为 `/data`。
 
 第一版没有内置认证。不要直接发布到公网；远程使用时应放在带 TLS 和认证的反向代理或受控 VPN 后面。
 

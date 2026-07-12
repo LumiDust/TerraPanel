@@ -45,7 +45,12 @@ def build_services(settings: Settings) -> ServiceContainer:
         instances=instances,
         process=process,
         server_config=server_config,
-        worlds=WorldService(instances, server_config),
+        worlds=WorldService(
+            instances,
+            server_config,
+            process,
+            max_upload_size=settings.worlds.max_upload_size,
+        ),
         mods=ModService(instances, process, max_upload_size=settings.mods.max_upload_size),
         logs=LogService(instances),
         backups=BackupService(instances, process, settings.storage.backups_dir),

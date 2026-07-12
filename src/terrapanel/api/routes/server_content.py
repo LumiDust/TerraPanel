@@ -38,6 +38,23 @@ def select_world(selection: WorldSelection, services: Services) -> ServerConfigV
     return services.worlds.select(selection.path)
 
 
+@router.post("/worlds/upload", response_model=WorldInfo, status_code=status.HTTP_201_CREATED)
+def upload_world(
+    files: Annotated[list[UploadFile], File()],
+    services: Services,
+    replace: Annotated[bool, Query()] = False,
+) -> WorldInfo:
+    return services.worlds.upload(
+        [(file.filename, file.file) for file in files],
+        replace=replace,
+    )
+
+
+@router.delete("/worlds/{name}", response_model=list[str])
+def delete_world(name: str, services: Services) -> list[str]:
+    return services.worlds.delete(name)
+
+
 @router.get("/mods", response_model=list[ModInfo])
 def list_mods(services: Services) -> list[ModInfo]:
     return services.mods.list()
@@ -64,6 +81,11 @@ def upload_mod(
     replace: Annotated[bool, Query()] = False,
 ) -> ModInfo:
     return services.mods.upload(file.filename, file.file, replace=replace)
+
+
+@router.delete("/mods/local/{name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_local_mod(name: str, services: Services) -> None:
+    services.mods.delete_local(name)
 
 
 @router.get("/logs/{source}", response_model=LogView)

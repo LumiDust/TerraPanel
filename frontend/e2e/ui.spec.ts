@@ -24,6 +24,10 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
     let body: unknown = {};
     if (path === "/api/v1/instance") {
       body = {
@@ -48,6 +52,7 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
           has_mod_data: true,
           size: 5242880,
           modified_at: "2026-07-12T00:00:00Z",
+          selected: true,
         },
       ];
     } else if (path === "/api/v1/mods") {
@@ -151,7 +156,7 @@ test("configured console is readable", async ({ page }) => {
   await mockConfiguredApi(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByRole("button", { name: "控制台" }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "控制台" }).click();
   await expect(page.getByText("Listening on port 7777")).toBeVisible();
   await expect(page.getByPlaceholder("输入服务端命令")).toBeEnabled();
   await expectNoHorizontalOverflow(page);
@@ -207,4 +212,96 @@ test("local mod upload fits mobile", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/mod-upload-mobile.png", fullPage: true });
+});
+
+test("mod workspace supports filtering and confirmed deletion", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "模组" }).click();
+  await expect(page.getByPlaceholder("搜索模组")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "RecipeBrowser" })).toBeVisible();
+  await page.getByPlaceholder("搜索模组").fill("Recipe");
+  await expect(page.getByText("BossChecklist")).toBeHidden();
+  await page.getByRole("button", { name: "删除" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "删除模组 RecipeBrowser" })).toBeVisible();
+  const deletion = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/mods/local/RecipeBrowser") && request.method() === "DELETE",
+  );
+  await dialog.getByRole("button", { name: "删除模组" }).click();
+  await deletion;
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/mod-management-desktop.png", fullPage: true });
+});
+
+test("backup workspace exposes download and confirmed deletion", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "备份" }).click();
+  await expect(page.getByPlaceholder("搜索备份")).toBeVisible();
+  await expect(page.getByTitle("下载备份")).toHaveAttribute("href", /\/api\/v1\/backups\/.+\/download/);
+  await page.getByTitle("删除备份").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "删除备份" })).toBeVisible();
+  const deletion = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/backups/") && request.method() === "DELETE",
+  );
+  await dialog.getByRole("button", { name: "删除备份" }).click();
+  await deletion;
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/backups-desktop.png", fullPage: true });
+});
+
+test("world saves can be imported and managed", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "存档" }).click();
+  await expect(page.getByText("当前")).toBeVisible();
+  await expect(page.getByTitle("删除存档")).toBeDisabled();
+  await page.locator('input[accept=".wld,.twld"]').setInputFiles([
+    {
+      name: "Imported.wld",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from([23, 1, 0, 0, 1]),
+    },
+    {
+      name: "Imported.twld",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("mod data"),
+    },
+  ]);
+  await expect(page.getByText("Imported.wld, Imported.twld")).toBeVisible();
+  const uploadRequest = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/worlds/upload") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "导入" }).click();
+  await uploadRequest;
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/worlds-desktop.png", fullPage: true });
+});
+
+test("world save management fits mobile", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "存档" }).click();
+  await expect(page.getByText("选择 .wld / .twld")).toBeVisible();
+  await expect(page.getByRole("button", { name: "导入" })).toBeDisabled();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/worlds-mobile.png", fullPage: true });
 });

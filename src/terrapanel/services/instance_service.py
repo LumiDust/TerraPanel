@@ -1,6 +1,7 @@
 import os
+import re
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from terrapanel.domain.errors import DomainValidationError, NotConfiguredError
 from terrapanel.domain.instance import InstanceAssociation, InstanceRecord
@@ -16,6 +17,9 @@ upnp=0
 priority=1
 """
 
+_LEGACY_SERVERS_ROOT = PurePosixPath("/var/lib/terrapanel/servers")
+_LEGACY_WORLD_SETTING = re.compile(r"^(\s*world\s*=\s*)(.*)$", re.IGNORECASE)
+
 
 class InstanceService:
     def __init__(self, repository: InstanceRepository, server_paths: PathPolicy) -> None:
@@ -26,7 +30,10 @@ class InstanceService:
         instance = self._repository.get()
         if instance is None:
             return None
-        return self._validate_record(instance)
+        instance = self._migrate_legacy_record(instance)
+        instance = self._validate_record(instance)
+        self._migrate_legacy_world_setting(instance)
+        return instance
 
     def require(self) -> InstanceRecord:
         instance = self.get()
@@ -100,6 +107,93 @@ class InstanceService:
                 "The stored instance paths do not match the configured server directory"
             )
         return instance
+
+    def _migrate_legacy_record(self, instance: InstanceRecord) -> InstanceRecord:
+        legacy_root = PurePosixPath(instance.root_dir.as_posix())
+        try:
+            relative = legacy_root.relative_to(_LEGACY_SERVERS_ROOT)
+        except ValueError:
+            return instance
+
+        if not relative.parts or ".." in relative.parts:
+            return instance
+
+        expected = (
+            legacy_root,
+            legacy_root / "server",
+            legacy_root / "server" / "start-tModLoaderServer.sh",
+            legacy_root / "serverconfig.txt",
+        )
+        actual = tuple(
+            PurePosixPath(path.as_posix())
+            for path in (
+                instance.root_dir,
+                instance.install_dir,
+                instance.launch_script,
+                instance.config_file,
+            )
+        )
+        if actual != expected:
+            raise DomainValidationError(
+                "The stored instance paths do not match the legacy server directory"
+            )
+
+        try:
+            root_dir = self._server_paths.resolve(
+                Path(*relative.parts),
+                must_exist=True,
+            )
+        except (FileNotFoundError, PathOutsideRootError) as error:
+            raise DomainValidationError(
+                f"The associated legacy instance is invalid: {error}"
+            ) from error
+
+        install_dir, launch_script, config_file = self._prepare_layout(root_dir)
+        migrated = instance.model_copy(
+            update={
+                "root_dir": root_dir,
+                "install_dir": install_dir,
+                "launch_script": launch_script,
+                "config_file": config_file,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        return self._repository.save(migrated)
+
+    def _migrate_legacy_world_setting(self, instance: InstanceRecord) -> None:
+        relative_root = instance.root_dir.relative_to(self._server_paths.root)
+        legacy_root = _LEGACY_SERVERS_ROOT.joinpath(*relative_root.parts)
+        lines = instance.config_file.read_text(encoding="utf-8").splitlines()
+        updated: list[str] = []
+        changed = False
+
+        for line in lines:
+            match = _LEGACY_WORLD_SETTING.match(line)
+            if match is None:
+                updated.append(line)
+                continue
+
+            legacy_world = PurePosixPath(match.group(2).strip())
+            try:
+                relative_world = legacy_world.relative_to(legacy_root)
+            except ValueError:
+                updated.append(line)
+                continue
+            if not relative_world.parts or ".." in relative_world.parts:
+                updated.append(line)
+                continue
+
+            current_world = self._resolve_managed(
+                instance.root_dir,
+                Path(*relative_world.parts),
+            )
+            updated.append(f"{match.group(1)}{current_world}")
+            changed = True
+
+        if changed:
+            temporary = instance.config_file.with_suffix(".tmp")
+            temporary.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
+            os.replace(temporary, instance.config_file)
 
     def _prepare_layout(self, root_dir: Path) -> tuple[Path, Path, Path]:
         if not root_dir.is_dir():

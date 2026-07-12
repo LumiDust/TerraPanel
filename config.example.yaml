@@ -6,9 +6,10 @@ http:
   port: 8080
 
 storage:
-  data_dir: data
-  servers_dir: data/servers
-  backups_dir: data/backups
+  root_dir: data
 
 mods:
   max_upload_size: 268435456
+
+worlds:
+  max_upload_size: 536870912
