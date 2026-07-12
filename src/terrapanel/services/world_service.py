@@ -136,10 +136,8 @@ class WorldService:
         world = self._instances.resolve_in_root(worlds_dir / f"{name}.wld", must_exist=True)
         if world.parent != worlds_dir or not world.is_file():
             raise ResourceNotFoundError(f"World does not exist: {name}")
-        if world == self._selected_world():
-            raise ConflictError("Select another world before deleting the active world")
 
-        deleted: list[str] = []
+        files: list[Path] = []
         for suffix in _DELETE_SUFFIXES:
             candidate = worlds_dir / f"{name}{suffix}"
             if not candidate.exists():
@@ -147,6 +145,13 @@ class WorldService:
             file = self._instances.resolve_in_root(candidate, must_exist=True)
             if not file.is_file() or file.parent != worlds_dir:
                 raise DomainValidationError(f"World companion is not a regular file: {file.name}")
+            files.append(file)
+
+        if world == self._selected_world():
+            self._server_config.set_values({"world": None})
+
+        deleted: list[str] = []
+        for file in files:
             file.unlink()
             deleted.append(file.name)
         return deleted

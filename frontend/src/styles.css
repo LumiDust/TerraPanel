@@ -149,6 +149,7 @@ dt { color: #747c86; } dd { margin: 0; overflow-wrap: anywhere; }
 .breadcrumbs button:hover, .breadcrumbs button.current { color: #237a5b; }
 .read-mode { flex: none; padding: 3px 7px; border: 1px solid #b9d9cc; border-radius: 3px; color: #237a5b; font-size: 10px; }
 .read-mode.locked { border-color: #e0c58a; color: #8c691c; }
+.section-heading .read-mode { margin-left: auto; }
 .file-actions-bar { display: grid; grid-template-columns: minmax(250px, .55fr) minmax(420px, 1.45fr); gap: 14px; padding: 14px 0; border-bottom: 1px solid #e8eaec; }
 .directory-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .file-upload-form { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; align-items: center; gap: 8px; }

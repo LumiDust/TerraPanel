@@ -58,7 +58,7 @@ class ModInfo(BaseModel):
 
 
 class ModToggle(BaseModel):
-    name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.-]+$")
+    name: str = Field(min_length=1, max_length=120, pattern=r"^[\w.-]+$")
 
 
 class LogView(BaseModel):

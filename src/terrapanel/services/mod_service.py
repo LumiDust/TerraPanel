@@ -16,7 +16,7 @@ from terrapanel.domain.server_content import ModInfo
 from terrapanel.services.instance_service import InstanceService
 
 _COPY_CHUNK_SIZE = 1024 * 1024
-_INTERNAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+_INTERNAL_NAME_PATTERN = re.compile(r"^[\w.-]{1,120}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +62,7 @@ class ModService:
                 file = self._instances.resolve_in_root(candidate, must_exist=True)
                 if not file.is_file():
                     continue
-                name = file.stem
+                name = self._read_installed_name(file)
                 mods.append(
                     ModInfo(
                         name=name,
@@ -211,6 +211,21 @@ class ModService:
             version=version,
             tmodloader_version=tmodloader_version,
         )
+
+    @staticmethod
+    def _read_installed_name(path: Path) -> str:
+        try:
+            with path.open("rb") as file:
+                if file.read(4) != b"TMOD":
+                    return path.stem
+                ModService._read_string(file, "tModLoader version", max_bytes=80)
+                ModService._read_exact(file, 20, "SHA-1 hash")
+                ModService._read_exact(file, 256, "signature")
+                ModService._read_exact(file, 4, "data length")
+                name = ModService._read_string(file, "mod name", max_bytes=120)
+        except (DomainValidationError, OSError, UnicodeDecodeError, struct.error):
+            return path.stem
+        return name if _INTERNAL_NAME_PATTERN.fullmatch(name) else path.stem
 
     @staticmethod
     def _read_string(file: BufferedIOBase, label: str, *, max_bytes: int) -> str:

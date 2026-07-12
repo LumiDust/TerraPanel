@@ -69,6 +69,7 @@ const provisioning = ref<ProvisionSnapshot | null>(null);
 const provisionLogs = ref<ConsoleEntry[]>([]);
 const logSource = ref("server");
 const busy = ref(false);
+const processActionPending = ref(false);
 const error = ref("");
 const command = ref("");
 const instanceName = ref("Primary Server");
@@ -119,11 +120,17 @@ const provisioningView = ref<HTMLElement | null>(null);
 const consoleFollowing = ref(true);
 const provisioningFollowing = ref(true);
 let timer: number | undefined;
+let pollInFlight = false;
 
 const scrollEndThreshold = 48;
+const maxConsoleEntries = 500;
 
 const configured = computed(() => instance.value?.configured === true);
 const running = computed(() => instance.value?.process.state === "running");
+const serverContentLocked = computed(() => {
+  const state = instance.value?.process.state;
+  return processActionPending.value || (state !== undefined && !["stopped", "failed"].includes(state));
+});
 const provisioningRunning = computed(() => provisioning.value?.state === "running");
 const provisionStages: Array<{ id: string; label: string }> = [
   { id: "preparing", label: "准备" },
@@ -204,6 +211,18 @@ async function perform(action: () => Promise<unknown>) {
   }
 }
 
+async function performProcessAction(action: () => Promise<unknown>) {
+  processActionPending.value = true;
+  error.value = "";
+  try {
+    await action();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason);
+  } finally {
+    processActionPending.value = false;
+  }
+}
+
 function requestConfirmation(value: PendingConfirmation) {
   pendingConfirmation.value = value;
 }
@@ -256,6 +275,9 @@ async function refreshConsole() {
   if (entries.length) {
     const shouldFollow = consoleFollowing.value;
     consoleEntries.value.push(...entries);
+    if (consoleEntries.value.length > maxConsoleEntries) {
+      consoleEntries.value.splice(0, consoleEntries.value.length - maxConsoleEntries);
+    }
     if (shouldFollow) await scrollConsoleToEnd();
   }
 }
@@ -342,7 +364,7 @@ function updateServer() {
 }
 
 async function startServer() {
-  await perform(async () => {
+  await performProcessAction(async () => {
     await api.start();
     await refreshInstance();
     await selectTab("console");
@@ -355,7 +377,7 @@ function stopServer() {
     message: "在线玩家会断开连接，tModLoader 将保存世界后退出。",
     confirmLabel: "停止服务器",
     danger: true,
-    action: () => perform(async () => {
+    action: () => performProcessAction(async () => {
       await api.stop();
       await refreshInstance();
     }),
@@ -402,7 +424,9 @@ async function uploadWorld() {
 function deleteWorld(world: WorldInfo) {
   requestConfirmation({
     title: `删除存档 ${world.name}`,
-    message: "主世界、模组世界数据和直接备份文件将一并删除。",
+    message: world.selected
+      ? "当前世界选择、主世界、模组世界数据和直接备份文件将一并删除。删除后请导入或选择其他存档。"
+      : "主世界、模组世界数据和直接备份文件将一并删除。",
     confirmLabel: "删除存档",
     danger: true,
     action: () => perform(async () => {
@@ -624,27 +648,33 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+async function pollServer() {
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try {
+    const previousState = provisioning.value?.state;
+    const wasConfigured = configured.value;
+    await refreshProvisioning();
+    await refreshInstance();
+    if (configured.value) {
+      if (!wasConfigured || (previousState === "running" && provisioning.value?.state === "succeeded")) {
+        await refreshAll();
+      } else {
+        await refreshConsole();
+      }
+    }
+  } catch {
+    // The next explicit action will surface connection failures.
+  } finally {
+    pollInFlight = false;
+  }
+}
+
 onMounted(async () => {
   await perform(async () => {
     await Promise.all([refreshAll(), refreshProvisioning()]);
   });
-  timer = window.setInterval(async () => {
-    try {
-      const previousState = provisioning.value?.state;
-      const wasConfigured = configured.value;
-      await refreshProvisioning();
-      await refreshInstance();
-      if (configured.value) {
-        if (!wasConfigured || (previousState === "running" && provisioning.value?.state === "succeeded")) {
-          await refreshAll();
-        } else {
-          await refreshConsole();
-        }
-      }
-    } catch {
-      // The next explicit action will surface connection failures.
-    }
-  }, 1500);
+  timer = window.setInterval(() => void pollServer(), 1500);
 });
 
 onBeforeUnmount(() => window.clearInterval(timer));
@@ -670,9 +700,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div><h1>{{ activeTabMeta.label }}</h1><p>{{ instance?.instance?.root_dir ?? "单实例管理" }}</p></div>
         <div class="actions">
           <button class="icon-button" title="刷新" :disabled="busy" @click="refreshCurrent"><RefreshCw :size="18" /></button>
-          <button v-if="configured && !running" class="icon-button" title="更新 tModLoader" :disabled="busy || provisioningRunning" @click="updateServer"><Download :size="18" /></button>
-          <button v-if="configured && !running" class="primary" :disabled="busy" @click="startServer"><Play :size="17" />启动</button>
-          <button v-if="configured && running" class="danger" :disabled="busy" @click="stopServer"><CircleStop :size="17" />停止</button>
+          <button v-if="configured && !running" class="icon-button" title="更新 tModLoader" :disabled="busy || provisioningRunning || processActionPending" @click="updateServer"><Download :size="18" /></button>
+          <button v-if="configured && !running" class="primary" :disabled="busy || processActionPending" @click="startServer"><Play :size="17" />启动</button>
+          <button v-if="configured && running" class="danger" :disabled="busy || processActionPending" @click="stopServer"><CircleStop :size="17" />停止</button>
         </div>
       </header>
 
@@ -760,7 +790,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <div class="section-heading"><Server :size="20" /><div><h2>{{ instance?.instance?.name }}</h2><p>{{ instance?.instance?.install_dir }}</p></div></div>
               <div class="quick-actions">
                 <button class="secondary" @click="selectTab('console')"><SquareTerminal :size="16" />控制台</button>
-                <button class="secondary" :disabled="running || busy" @click="createBackup"><Save :size="16" />立即备份</button>
+                <button class="secondary" :disabled="serverContentLocked || busy" @click="createBackup"><Save :size="16" />立即备份</button>
                 <button class="secondary" @click="activeTab = 'logs'; refreshLog()"><FileText :size="16" />查看日志</button>
               </div>
               <dl>
@@ -813,19 +843,19 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <div class="section-heading"><FolderOpen :size="20" /><div><h2>服务器存档</h2><p>{{ worlds.length }} 个世界</p></div></div>
           <form class="asset-upload" @submit.prevent="uploadWorld">
             <label class="file-picker">
-              <input ref="worldFileInput" type="file" accept=".wld,.twld" multiple :disabled="running || busy" @change="selectWorldFiles" />
+              <input ref="worldFileInput" type="file" accept=".wld,.twld" multiple :disabled="serverContentLocked || busy" @change="selectWorldFiles" />
               <span>{{ worldFiles.length ? worldFiles.map((file) => file.name).join(', ') : "选择 .wld / .twld" }}</span>
             </label>
-            <label class="check-row"><input v-model="replaceWorld" type="checkbox" :disabled="running || busy" />覆盖同名</label>
-            <button class="primary" :disabled="!worldFiles.some((file) => file.name.toLowerCase().endsWith('.wld')) || running || busy"><Upload :size="17" />导入</button>
+            <label class="check-row"><input v-model="replaceWorld" type="checkbox" :disabled="serverContentLocked || busy" />覆盖同名</label>
+            <button class="primary" :disabled="!worldFiles.some((file) => file.name.toLowerCase().endsWith('.wld')) || serverContentLocked || busy"><Upload :size="17" />导入</button>
           </form>
           <div class="table-list">
             <div v-for="world in worlds" :key="world.path" class="table-row">
               <span><strong>{{ world.name }}</strong><small>{{ formatBytes(world.size) }} · {{ world.has_mod_data ? "Mod" : "Vanilla" }}</small></span>
               <div class="row-actions">
                 <span v-if="world.selected" class="tag">当前</span>
-                <button class="icon-button" title="设为当前" :disabled="world.selected || running || busy" @click="selectWorld(world.path)"><Check :size="17" /></button>
-                <button class="icon-button danger-icon" title="删除存档" :disabled="world.selected || running || busy" @click="deleteWorld(world)"><Trash2 :size="17" /></button>
+                <button class="icon-button" title="设为当前" :disabled="world.selected || serverContentLocked || busy" @click="selectWorld(world.path)"><Check :size="17" /></button>
+                <button class="icon-button danger-icon" title="删除存档" :disabled="serverContentLocked || busy" @click="deleteWorld(world)"><Trash2 :size="17" /></button>
               </div>
             </div>
             <div v-if="!worlds.length" class="empty">未发现世界存档</div>
@@ -840,21 +870,21 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <button :class="{ current: index === fileBreadcrumbs.length - 1 }" @click="openManagedDirectory(crumb.path)">{{ crumb.label }}</button>
               </template>
             </nav>
-            <span class="read-mode" :class="{ locked: running }">{{ running ? "运行中只读" : "可修改" }}</span>
+            <span class="read-mode" :class="{ locked: serverContentLocked }">{{ serverContentLocked ? "运行中只读" : "可修改" }}</span>
           </div>
 
           <div class="file-actions-bar">
             <form class="directory-form" @submit.prevent="createManagedDirectory">
-              <input v-model="newDirectoryName" :disabled="running || busy" maxlength="255" placeholder="新目录名称" />
-              <button class="secondary" :disabled="!newDirectoryName.trim() || running || busy"><FolderPlus :size="17" />新建</button>
+              <input v-model="newDirectoryName" :disabled="serverContentLocked || busy" maxlength="255" placeholder="新目录名称" />
+              <button class="secondary" :disabled="!newDirectoryName.trim() || serverContentLocked || busy"><FolderPlus :size="17" />新建</button>
             </form>
             <form class="file-upload-form" @submit.prevent="uploadManagedFiles">
               <label class="file-picker">
-                <input ref="managedFileInput" type="file" multiple :disabled="running || busy" @change="selectManagedFiles" />
+                <input ref="managedFileInput" type="file" multiple :disabled="serverContentLocked || busy" @change="selectManagedFiles" />
                 <span>{{ managedFiles.length ? managedFiles.map((file) => file.name).join(', ') : "选择文件或 ZIP 整合包" }}</span>
               </label>
-              <label class="check-row"><input v-model="replaceManagedFiles" type="checkbox" :disabled="running || busy" />覆盖同名</label>
-              <button class="primary" :disabled="!managedFiles.length || running || busy"><Upload :size="17" />上传</button>
+              <label class="check-row"><input v-model="replaceManagedFiles" type="checkbox" :disabled="serverContentLocked || busy" />覆盖同名</label>
+              <button class="primary" :disabled="!managedFiles.length || serverContentLocked || busy"><Upload :size="17" />上传</button>
             </form>
           </div>
 
@@ -874,10 +904,10 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <span class="file-size">{{ entry.size === null ? "—" : formatBytes(entry.size) }}</span>
               <time>{{ new Date(entry.modified_at).toLocaleString() }}</time>
               <div class="row-actions">
-                <button v-if="entry.archive" class="icon-button" title="查看并解压" :disabled="running || busy" @click="inspectManagedArchive(entry)"><ArchiveRestore :size="17" /></button>
+                <button v-if="entry.archive" class="icon-button" title="查看并解压" :disabled="serverContentLocked || busy" @click="inspectManagedArchive(entry)"><ArchiveRestore :size="17" /></button>
                 <a v-if="entry.kind === 'file'" class="icon-button" title="下载" :href="api.fileDownloadUrl(entry.path)" download><Download :size="17" /></a>
-                <button class="icon-button" title="移动或重命名" :disabled="entry.kind === 'symlink' || entry.kind === 'other' || running || busy" @click="openMoveDialog(entry)"><Pencil :size="17" /></button>
-                <button class="icon-button danger-icon" title="删除" :disabled="running || busy" @click="deleteManagedEntry(entry)"><Trash2 :size="17" /></button>
+                <button class="icon-button" title="移动或重命名" :disabled="entry.kind === 'symlink' || entry.kind === 'other' || serverContentLocked || busy" @click="openMoveDialog(entry)"><Pencil :size="17" /></button>
+                <button class="icon-button danger-icon" title="删除" :disabled="serverContentLocked || busy" @click="deleteManagedEntry(entry)"><Trash2 :size="17" /></button>
               </div>
             </div>
             <div v-if="fileListing && !fileListing.entries.length" class="empty">此目录为空</div>
@@ -886,14 +916,14 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-if="activeTab === 'mods'" class="panel management-panel">
-          <div class="section-heading"><Boxes :size="20" /><div><h2>模组管理</h2><p>{{ enabledMods.length }} 启用 · {{ mods.filter((mod) => mod.source === 'local').length }} 本地 · {{ mods.filter((mod) => mod.source === 'workshop').length }} Workshop</p></div></div>
+          <div class="section-heading"><Boxes :size="20" /><div><h2>模组管理</h2><p>{{ enabledMods.length }} 启用 · {{ mods.filter((mod) => mod.source === 'local').length }} 本地 · {{ mods.filter((mod) => mod.source === 'workshop').length }} Workshop</p></div><span v-if="serverContentLocked" class="read-mode locked">更改将在重启后生效</span></div>
           <form class="asset-upload" @submit.prevent="uploadMod">
             <label class="file-picker">
-              <input ref="modFileInput" type="file" accept=".tmod" :disabled="running || busy" @change="selectModFile" />
+              <input ref="modFileInput" type="file" accept=".tmod" :disabled="serverContentLocked || busy" @change="selectModFile" />
               <span>{{ modFile?.name ?? "选择 .tmod" }}</span>
             </label>
-            <label class="check-row"><input v-model="replaceMod" type="checkbox" :disabled="running || busy" />覆盖同名</label>
-            <button class="primary" :disabled="!modFile || running || busy"><Upload :size="17" />上传</button>
+            <label class="check-row"><input v-model="replaceMod" type="checkbox" :disabled="serverContentLocked || busy" />覆盖同名</label>
+            <button class="primary" :disabled="!modFile || serverContentLocked || busy"><Upload :size="17" />上传</button>
           </form>
           <div class="management-toolbar">
             <label class="search-field"><Search :size="16" /><input v-model="modQuery" placeholder="搜索模组" /></label>
@@ -908,7 +938,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <span class="mod-mark"><PackageOpen :size="18" /></span>
                   <span><strong>{{ mod.name }}</strong><small>{{ mod.source === 'local' ? '本地文件' : 'Workshop' }} · {{ formatBytes(mod.size) }}</small></span>
                 </button>
-                <label class="switch" :title="mod.enabled ? '停用模组' : '启用模组'"><input type="checkbox" :checked="mod.enabled" :disabled="busy || running" @change="toggleMod(mod)" /><span></span></label>
+                <label class="switch" :title="`${mod.enabled ? '停用模组' : '启用模组'}${serverContentLocked ? '（重启后生效）' : ''}`"><input type="checkbox" :checked="mod.enabled" :disabled="busy" @change="toggleMod(mod)" /><span></span></label>
               </div>
               <div v-if="!filteredMods.length" class="empty">没有匹配的模组</div>
             </div>
@@ -916,8 +946,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <div class="detail-title"><span class="mod-mark large"><PackageOpen :size="24" /></span><div><h3>{{ selectedMod.name }}</h3><span class="tag">{{ selectedMod.enabled ? "已启用" : "已停用" }}</span></div></div>
               <dl><dt>来源</dt><dd>{{ selectedMod.source === "local" ? "本地上传" : "Steam Workshop" }}</dd><dt>大小</dt><dd>{{ formatBytes(selectedMod.size) }}</dd><dt>文件</dt><dd>{{ selectedMod.file }}</dd></dl>
               <div class="detail-actions">
-                <button class="secondary" :disabled="busy || running" @click="toggleMod(selectedMod)">{{ selectedMod.enabled ? "停用" : "启用" }}</button>
-                <button v-if="selectedMod.source === 'local'" class="danger" :disabled="busy || running" @click="deleteMod(selectedMod)"><Trash2 :size="16" />删除</button>
+                <button class="secondary" :disabled="busy" @click="toggleMod(selectedMod)">{{ selectedMod.enabled ? "停用" : "启用" }}</button>
+                <button v-if="selectedMod.source === 'local'" class="danger" :disabled="busy || serverContentLocked" @click="deleteMod(selectedMod)"><Trash2 :size="16" />删除</button>
               </div>
             </aside>
           </div>
@@ -927,10 +957,10 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <div class="section-heading"><HardDrive :size="20" /><div><h2>存档备份</h2><p>{{ backups.length }} 个归档 · {{ formatBytes(totalBackupSize) }}</p></div></div>
           <div class="backup-toolbar">
             <label class="search-field"><Search :size="16" /><input v-model="backupQuery" placeholder="搜索备份" /></label>
-            <form class="inline-form" @submit.prevent="createBackup"><input v-model="backupLabel" pattern="[A-Za-z0-9_.-]+" placeholder="标签（可选）" /><button class="primary" :disabled="running"><Save :size="17" />创建备份</button></form>
+            <form class="inline-form" @submit.prevent="createBackup"><input v-model="backupLabel" pattern="[A-Za-z0-9_.-]+" placeholder="标签（可选）" /><button class="primary" :disabled="serverContentLocked"><Save :size="17" />创建备份</button></form>
           </div>
           <div class="table-list">
-            <div v-for="backup in filteredBackups" :key="backup.id" class="table-row"><span><strong>{{ backup.id }}</strong><small>{{ new Date(backup.created_at).toLocaleString() }} · {{ formatBytes(backup.size) }} · {{ backup.world_files }} 个世界</small></span><div class="row-actions"><a class="icon-button" title="下载备份" :href="api.backupDownloadUrl(backup.id)" download><Download :size="18" /></a><button class="icon-button" title="恢复备份" :disabled="running" @click="restoreBackup(backup)"><ArchiveRestore :size="18" /></button><button class="icon-button danger-icon" title="删除备份" @click="deleteBackup(backup)"><Trash2 :size="18" /></button></div></div>
+            <div v-for="backup in filteredBackups" :key="backup.id" class="table-row"><span><strong>{{ backup.id }}</strong><small>{{ new Date(backup.created_at).toLocaleString() }} · {{ formatBytes(backup.size) }} · {{ backup.world_files }} 个世界</small></span><div class="row-actions"><a class="icon-button" title="下载备份" :href="api.backupDownloadUrl(backup.id)" download><Download :size="18" /></a><button class="icon-button" title="恢复备份" :disabled="serverContentLocked" @click="restoreBackup(backup)"><ArchiveRestore :size="18" /></button><button class="icon-button danger-icon" title="删除备份" @click="deleteBackup(backup)"><Trash2 :size="18" /></button></div></div>
             <div v-if="!filteredBackups.length" class="empty">没有匹配的备份</div>
           </div>
         </section>
@@ -954,7 +984,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div><h2 id="move-title">移动或重命名</h2><p>{{ movingEntry.path }}</p></div>
         <label class="dialog-field">目标路径<input v-model="moveDestination" maxlength="1024" /></label>
         <label class="check-row"><input v-model="replaceMoveDestination" type="checkbox" />覆盖同名文件</label>
-        <div class="dialog-actions"><button class="secondary" @click="movingEntry = null">取消</button><button class="primary" :disabled="busy || !moveDestination.trim()" @click="moveManagedEntry">保存</button></div>
+        <div class="dialog-actions"><button class="secondary" @click="movingEntry = null">取消</button><button class="primary" :disabled="busy || serverContentLocked || !moveDestination.trim()" @click="moveManagedEntry">保存</button></div>
       </section>
     </div>
 
@@ -964,7 +994,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <dl class="archive-summary"><dt>顶层目录</dt><dd>{{ archivePreview.top_level.join(', ') || '无' }}</dd><dt>已有冲突</dt><dd>{{ archivePreview.conflicts.length }}</dd></dl>
         <label class="dialog-field">目标目录（实例根留空）<input v-model="archiveDestination" maxlength="1024" placeholder="根目录" @change="refreshArchivePreview" /></label>
         <label class="check-row"><input v-model="replaceArchiveFiles" type="checkbox" :disabled="!archivePreview.conflicts.length" />覆盖已有文件</label>
-        <div class="dialog-actions"><button class="secondary" @click="archivePreview = null">取消</button><button class="primary" :disabled="busy || (archivePreview.conflicts.length > 0 && !replaceArchiveFiles)" @click="extractManagedArchive"><ArchiveRestore :size="17" />解压</button></div>
+        <div class="dialog-actions"><button class="secondary" @click="archivePreview = null">取消</button><button class="primary" :disabled="busy || serverContentLocked || (archivePreview.conflicts.length > 0 && !replaceArchiveFiles)" @click="extractManagedArchive"><ArchiveRestore :size="17" />解压</button></div>
       </section>
     </div>
   </div>

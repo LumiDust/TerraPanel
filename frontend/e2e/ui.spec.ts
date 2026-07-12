@@ -26,11 +26,34 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     { sequence: 2, timestamp: "2026-07-12T03:15:01Z", stream: "stdout", text: "Listening on port 7777" },
     { sequence: 3, timestamp: "2026-07-12T03:15:02Z", stream: "stdout", text: "Server started" },
   ];
+  const modsOutput = [
+    { name: "RecipeBrowser", source: "local", file: "Mods/RecipeBrowser.tmod", size: 880000, enabled: true },
+    { name: "BossChecklist", source: "workshop", file: "steamapps/workshop/content/1281930/1/BossChecklist.tmod", size: 1200000, enabled: false },
+    { name: "森罗万象", source: "workshop", file: "steamapps/workshop/content/1281930/2/PublishedPackage.tmod", size: 77630932, enabled: true },
+  ];
+  const worldsOutput = [
+    {
+      name: "TerraPrime",
+      path: "Worlds/TerraPrime.wld",
+      has_mod_data: true,
+      size: 5242880,
+      modified_at: "2026-07-12T00:00:00Z",
+      selected: true,
+    },
+  ];
+  const controls = { stopDelayMs: 0 };
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (route.request().method() === "DELETE") {
-      await route.fulfill({ status: 204 });
+      if (path.startsWith("/api/v1/worlds/")) {
+        const name = decodeURIComponent(path.slice("/api/v1/worlds/".length));
+        const worldIndex = worldsOutput.findIndex((world) => world.name === name);
+        if (worldIndex >= 0) worldsOutput.splice(worldIndex, 1);
+        await route.fulfill({ json: [`${name}.wld`, `${name}.twld`] });
+      } else {
+        await route.fulfill({ status: 204 });
+      }
       return;
     }
     let body: unknown = {};
@@ -50,21 +73,14 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     else if (path === "/api/v1/server-config") {
       body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
     } else if (path === "/api/v1/worlds") {
-      body = [
-        {
-          name: "TerraPrime",
-          path: "Worlds/TerraPrime.wld",
-          has_mod_data: true,
-          size: 5242880,
-          modified_at: "2026-07-12T00:00:00Z",
-          selected: true,
-        },
-      ];
+      body = worldsOutput;
     } else if (path === "/api/v1/mods") {
-      body = [
-        { name: "RecipeBrowser", source: "local", file: "Mods/RecipeBrowser.tmod", size: 880000, enabled: true },
-        { name: "BossChecklist", source: "workshop", file: "steamapps/workshop/content/1281930/1/BossChecklist.tmod", size: 1200000, enabled: false },
-      ];
+      body = modsOutput;
+    } else if (path === "/api/v1/mods/enable" || path === "/api/v1/mods/disable") {
+      const payload = route.request().postDataJSON() as { name: string };
+      const mod = modsOutput.find((entry) => entry.name === payload.name);
+      if (mod) mod.enabled = path.endsWith("/enable");
+      body = modsOutput.filter((entry) => entry.enabled).map((entry) => entry.name);
     } else if (path === "/api/v1/backups") {
       body = [
         { id: "20260712T031500000000Z-manual", created_at: "2026-07-12T03:15:00Z", size: 7340032, world_files: 1 },
@@ -107,14 +123,20 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       body = { name: "renamed.zip", path: "renamed.zip", kind: "file", size: 128, modified_at: "2026-07-12T03:15:00Z", archive: true };
     } else if (path === "/api/v1/instance/console") {
       const afterSequence = Number(url.searchParams.get("after_sequence") ?? 0);
-      body = consoleOutput.filter((entry) => entry.sequence > afterSequence);
+      const limit = Number(url.searchParams.get("limit") ?? 500);
+      body = consoleOutput.filter((entry) => entry.sequence > afterSequence).slice(-limit);
     } else if (path.startsWith("/api/v1/logs/")) {
       body = { source: "server", path: "server/tModLoader-Logs/server.log", lines: ["Server started", "World loaded: TerraPrime"] };
-    } else if (path.endsWith("/start") || path.endsWith("/stop")) body = instance.process;
+    } else if (path.endsWith("/stop")) {
+      if (controls.stopDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, controls.stopDelayMs));
+      }
+      body = { ...instance.process, state: "stopped", pid: null };
+    } else if (path.endsWith("/start")) body = instance.process;
     else if (path.endsWith("/console")) body = { status: "accepted" };
     await route.fulfill({ json: body });
   });
-  return { consoleOutput };
+  return { consoleOutput, controls, modsOutput };
 }
 
 async function mockInstallingApi(page: Page) {
@@ -252,6 +274,17 @@ test("configured console is readable", async ({ page }) => {
   await page.getByTitle("刷新").click();
   await expect(page.getByText("Console output while following")).toBeAttached();
   await expect.poll(() => consoleTerminal.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+  for (let sequence = 83; sequence <= 1300; sequence += 1) {
+    consoleOutput.push({
+      sequence,
+      timestamp: "2026-07-12T03:17:00Z",
+      stream: "stdout",
+      text: `Sustained console output ${sequence}`,
+    });
+  }
+  await page.getByTitle("刷新").click();
+  await expect(page.getByText("Sustained console output 1300")).toBeAttached();
+  await expect(consoleTerminal.locator(".terminal-line")).toHaveCount(500);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/configured-console.png", fullPage: true });
@@ -331,6 +364,39 @@ test("mod workspace supports filtering and confirmed deletion", async ({ page })
   await page.screenshot({ path: "test-results/screenshots/mod-management-desktop.png", fullPage: true });
 });
 
+test("running server mod switches stay usable while stop is pending", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const { controls } = await mockConfiguredApi(page, "running");
+  controls.stopDelayMs = 1500;
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "停止" }).click();
+  const dialog = page.getByRole("dialog");
+  const stopResponse = page.waitForResponse(
+    (response) => response.url().endsWith("/api/v1/instance/stop") && response.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "停止服务器" }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "模组" }).click();
+
+  await expect(page.getByText("更改将在重启后生效")).toBeVisible();
+  const unicodeMod = page.locator(".mod-row").filter({ hasText: "森罗万象" });
+  const toggle = unicodeMod.getByRole("checkbox");
+  await expect(toggle).toBeEnabled();
+  const disableRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/mods/disable") && request.method() === "POST",
+  );
+  await toggle.uncheck();
+  const request = await disableRequest;
+  expect(request.postDataJSON()).toEqual({ name: "森罗万象" });
+  await expect(toggle).not.toBeChecked();
+  await stopResponse;
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/running-mod-switch.png", fullPage: true });
+});
+
 test("backup workspace exposes download and confirmed deletion", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -361,7 +427,18 @@ test("world saves can be imported and managed", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "存档" }).click();
   await expect(page.getByText("当前")).toBeVisible();
-  await expect(page.getByTitle("删除存档")).toBeDisabled();
+  const deleteButton = page.getByTitle("删除存档");
+  await expect(deleteButton).toBeEnabled();
+  await deleteButton.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "删除存档 TerraPrime" })).toBeVisible();
+  await expect(dialog.getByText("删除后请导入或选择其他存档。")).toBeVisible();
+  const deletion = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/worlds/TerraPrime") && request.method() === "DELETE",
+  );
+  await dialog.getByRole("button", { name: "删除存档" }).click();
+  await deletion;
+  await expect(page.getByText("TerraPrime")).toBeHidden();
   await page.locator('input[accept=".wld,.twld"]').setInputFiles([
     {
       name: "Imported.wld",
