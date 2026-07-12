@@ -3,7 +3,7 @@ FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 FROM python:3.14-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG TERRAPANEL_VERSION=0.1.0
+ARG TERRAPANEL_VERSION=1.0.0
 
 LABEL org.opencontainers.image.title="TerraPanel" \
     org.opencontainers.image.description="Web management panel for tModLoader dedicated servers" \

@@ -148,7 +148,7 @@ docker compose up -d --no-build
 数据目录不会因容器更新而删除。需要固定版本时，直接修改 `compose.yaml` 中的镜像标签：
 
 ```yaml
-image: "ghcr.io/lumidust/terrapanel:<版本号>"
+image: "ghcr.io/lumidust/terrapanel:1.0"
 ```
 
 可用版本以 GitHub Packages 中实际发布的标签为准。
