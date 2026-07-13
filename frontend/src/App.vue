@@ -237,6 +237,15 @@ async function refreshInstance() {
   instance.value = await api.instance();
 }
 
+function applyConfig(values: Record<string, string>) {
+  configForm.value = {
+    maxplayers: Number(values.maxplayers ?? 8),
+    port: Number(values.port ?? 7777),
+    password: values.password ?? "",
+    motd: values.motd ?? "",
+  };
+}
+
 async function refreshAll() {
   await refreshInstance();
   if (!configured.value) return;
@@ -249,12 +258,7 @@ async function refreshAll() {
   worlds.value = worldList;
   mods.value = modList;
   backups.value = backupList;
-  configForm.value = {
-    maxplayers: Number(config.values.maxplayers ?? 8),
-    port: Number(config.values.port ?? 7777),
-    password: config.values.password ?? "",
-    motd: config.values.motd ?? "",
-  };
+  applyConfig(config.values);
   await refreshConsole();
 }
 
@@ -400,7 +404,8 @@ async function saveConfig() {
 
 async function selectWorld(path: string) {
   await perform(async () => {
-    await api.selectWorld(path);
+    const config = await api.selectWorld(path);
+    applyConfig(config.values);
     worlds.value = await api.worlds();
   });
 }
@@ -425,13 +430,14 @@ function deleteWorld(world: WorldInfo) {
   requestConfirmation({
     title: `删除存档 ${world.name}`,
     message: world.selected
-      ? "当前世界选择、主世界、模组世界数据和直接备份文件将一并删除。删除后请导入或选择其他存档。"
-      : "主世界、模组世界数据和直接备份文件将一并删除。",
+      ? "主世界、模组世界数据、直接备份文件和独立配置将一并删除。删除后不会自动选择或创建其他存档。"
+      : "主世界、模组世界数据、直接备份文件和独立配置将一并删除。",
     confirmLabel: "删除存档",
     danger: true,
     action: () => perform(async () => {
       await api.deleteWorld(world.name);
       worlds.value = await api.worlds();
+      applyConfig((await api.config()).values);
     }),
   });
 }
@@ -796,7 +802,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <dl>
                 <dt>当前世界</dt><dd>{{ activeWorld?.name ?? "未选择" }}</dd>
                 <dt>模组</dt><dd>{{ enabledMods.length }} 启用 / {{ mods.length }} 已安装</dd>
-                <dt>配置文件</dt><dd>{{ instance?.instance?.config_file }}</dd>
+                <dt>配置文件</dt><dd>{{ activeWorld ? `WorldConfigs/${activeWorld.name}.txt` : "未选择" }}</dd>
                 <dt>退出码</dt><dd>{{ instance?.process.exit_code ?? "—" }}</dd>
               </dl>
             </section>
@@ -829,13 +835,13 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-if="activeTab === 'config'" class="panel">
-            <div class="section-heading"><FileCog :size="20" /><h2>服务器配置</h2></div>
+            <div class="section-heading"><FileCog :size="20" /><div><h2>服务器配置</h2><p>{{ activeWorld ? `${activeWorld.name} · 独立配置` : "未选择存档" }}</p></div></div>
             <form class="form-grid" @submit.prevent="saveConfig">
-              <label>最大玩家数<input v-model.number="configForm.maxplayers" type="number" min="1" max="255" /></label>
-              <label>端口<input v-model.number="configForm.port" type="number" min="1" max="65535" /></label>
-              <label class="full">密码<input v-model="configForm.password" type="password" /></label>
-              <label class="full">欢迎消息<input v-model="configForm.motd" /></label>
-              <button class="primary"><Save :size="17" />保存配置</button>
+              <label>最大玩家数<input v-model.number="configForm.maxplayers" type="number" min="1" max="255" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+              <label>端口<input v-model.number="configForm.port" type="number" min="1" max="65535" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+              <label class="full">密码<input v-model="configForm.password" type="password" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+              <label class="full">欢迎消息<input v-model="configForm.motd" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+              <button class="primary" :disabled="!activeWorld || serverContentLocked || busy"><Save :size="17" />保存配置</button>
             </form>
         </section>
 

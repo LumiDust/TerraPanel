@@ -124,11 +124,10 @@ class ProvisioningService:
             )
 
             self._set_stage(ProvisionStage.CONFIGURING)
-            self._server_config.set_values(
+            self._server_config.create_world_profile(
+                root_dir / "Worlds" / f"{request.world_name}.wld",
                 {
-                    "world": root_dir / "Worlds" / f"{request.world_name}.wld",
                     "autocreate": request.world_size,
-                    "worldname": request.world_name,
                     "difficulty": request.difficulty,
                     "maxplayers": request.max_players,
                     "port": request.port,
@@ -136,7 +135,8 @@ class ProvisioningService:
                     "motd": request.motd,
                     "secure": request.secure,
                     "upnp": request.upnp,
-                }
+                },
+                select=True,
             )
 
             process: ProcessSnapshot | None = None

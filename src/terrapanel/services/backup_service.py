@@ -15,6 +15,8 @@ from terrapanel.services.process_manager import ProcessManager
 
 _SINGLE_FILES = ("serverconfig.txt", "banlist.txt")
 _MOD_FILES = ("enabled.json", "install.txt")
+_PROFILE_DIRECTORY = "WorldConfigs"
+_SELECTION_FILE = "active.json"
 
 
 class BackupService:
@@ -80,6 +82,15 @@ class BackupService:
                     archive.write(file, relative)
                     written.append(relative)
 
+                profile_directory = instance.root_dir / _PROFILE_DIRECTORY
+                for file in profile_directory.glob("*"):
+                    if not file.is_file():
+                        continue
+                    managed = self._instances.resolve_in_root(file, must_exist=True)
+                    relative = managed.relative_to(instance.root_dir).as_posix()
+                    archive.write(managed, relative)
+                    written.append(relative)
+
                 for name in _SINGLE_FILES:
                     file = instance.root_dir / name
                     if file.is_file():
@@ -130,11 +141,18 @@ class BackupService:
 
             current_worlds = instance.root_dir / "Worlds"
             previous_worlds = instance.root_dir / f".Worlds-before-restore-{uuid4().hex}"
+            current_profiles = instance.root_dir / _PROFILE_DIRECTORY
+            previous_profiles = instance.root_dir / f".WorldConfigs-before-restore-{uuid4().hex}"
+            restored_profiles = temporary_root / _PROFILE_DIRECTORY
             if current_worlds.exists():
                 os.replace(current_worlds, previous_worlds)
+            if current_profiles.exists():
+                os.replace(current_profiles, previous_profiles)
 
             try:
                 os.replace(restored_worlds, current_worlds)
+                if restored_profiles.exists():
+                    os.replace(restored_profiles, current_profiles)
                 for name in _SINGLE_FILES:
                     self._copy_if_present(temporary_root / name, instance.root_dir / name)
                 for name in _MOD_FILES:
@@ -147,10 +165,16 @@ class BackupService:
                     shutil.rmtree(current_worlds)
                 if previous_worlds.exists():
                     os.replace(previous_worlds, current_worlds)
+                if current_profiles.exists():
+                    shutil.rmtree(current_profiles)
+                if previous_profiles.exists():
+                    os.replace(previous_profiles, current_profiles)
                 raise
             else:
                 if previous_worlds.exists():
                     shutil.rmtree(previous_worlds)
+                if previous_profiles.exists():
+                    shutil.rmtree(previous_profiles)
 
         return next(backup for backup in self.list() if backup.id == backup_id)
 
@@ -201,6 +225,10 @@ class BackupService:
             return True
         if relative.parts and relative.parts[0] == "Worlds":
             return True
+        if len(relative.parts) == 1 and relative.parts[0] == _PROFILE_DIRECTORY:
+            return True
+        if len(relative.parts) == 2 and relative.parts[0] == _PROFILE_DIRECTORY:
+            return relative.suffix == ".txt" or relative.name == _SELECTION_FILE
         return (
             len(relative.parts) == 2
             and relative.parts[0] == "Mods"

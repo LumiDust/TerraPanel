@@ -74,6 +74,10 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
     } else if (path === "/api/v1/worlds") {
       body = worldsOutput;
+    } else if (path === "/api/v1/worlds/select") {
+      const payload = route.request().postDataJSON() as { path: string };
+      for (const world of worldsOutput) world.selected = world.path === payload.path;
+      body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
     } else if (path === "/api/v1/mods") {
       body = modsOutput;
     } else if (path === "/api/v1/mods/enable" || path === "/api/v1/mods/disable") {
@@ -432,13 +436,17 @@ test("world saves can be imported and managed", async ({ page }) => {
   await deleteButton.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "删除存档 TerraPrime" })).toBeVisible();
-  await expect(dialog.getByText("删除后请导入或选择其他存档。")).toBeVisible();
+  await expect(dialog.getByText("删除后不会自动选择或创建其他存档。")).toBeVisible();
   const deletion = page.waitForRequest(
     (request) => request.url().endsWith("/api/v1/worlds/TerraPrime") && request.method() === "DELETE",
   );
   await dialog.getByRole("button", { name: "删除存档" }).click();
   await deletion;
   await expect(page.getByText("TerraPrime")).toBeHidden();
+  await page.getByRole("button", { name: "服务器" }).click();
+  await expect(page.getByText("未选择存档")).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+  await page.getByRole("button", { name: "存档" }).click();
   await page.locator('input[accept=".wld,.twld"]').setInputFiles([
     {
       name: "Imported.wld",

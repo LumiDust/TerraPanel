@@ -52,6 +52,9 @@ def remove_instance(services: Services) -> Response:
 async def start_instance(services: Services) -> ProcessSnapshot:
     if services.provisioning.is_running():
         raise ConflictError("Wait for installation or update to finish")
+    if services.process.is_running():
+        raise ConflictError("The tModLoader server is already running")
+    services.worlds.ensure_startable()
     return await services.process.start()
 
 

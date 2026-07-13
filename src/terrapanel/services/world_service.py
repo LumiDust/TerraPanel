@@ -53,6 +53,7 @@ class WorldService:
             world = self._instances.resolve_in_root(candidate, must_exist=True)
             if not world.is_file() or world.parent != worlds_dir:
                 continue
+            self._server_config.ensure_world_profile(world)
             mod_data = world.with_suffix(".twld")
             has_mod_data = False
             if mod_data.exists():
@@ -80,7 +81,41 @@ class WorldService:
             raise ResourceNotFoundError(
                 "World must be a .wld file in the instance Worlds directory"
             )
-        return self._server_config.set_values({"world": world})
+        return self._server_config.select_world(world)
+
+    def ensure_startable(self) -> None:
+        instance = self._instances.require()
+        selected = self._server_config.selected_world()
+        if selected is None:
+            raise ConflictError("Select or import a world before starting the server")
+
+        values = self._server_config.read().values
+        configured = values.get("world")
+        if not configured:
+            raise ConflictError("The selected world configuration has no world path")
+
+        try:
+            world = self._instances.resolve_in_root(configured)
+        except DomainValidationError as error:
+            raise ConflictError("The configured world path is not valid") from error
+        worlds_dir = instance.root_dir / "Worlds"
+        if world.suffix.lower() != ".wld" or world.parent != worlds_dir:
+            raise ConflictError("The configured world must be a .wld file in the Worlds directory")
+        if world != selected:
+            raise ConflictError("The active world configuration does not match its world")
+
+        if world.exists():
+            existing = self._instances.resolve_in_root(world, must_exist=True)
+            if existing.is_file():
+                return
+            raise ConflictError("The configured world is not a regular file")
+
+        if values.get("autocreate") not in {"1", "2", "3"} or not values.get(
+            "worldname", ""
+        ).strip():
+            raise ConflictError(
+                "The configured world does not exist; select or import a world before starting"
+            )
 
     def upload(
         self,
@@ -120,6 +155,7 @@ class WorldService:
                 temporary[suffix] = path
             self._validate_world_file(temporary[".wld"])
             self._replace_world_pair(world_name, worlds_dir, temporary, replace=replace)
+            self._server_config.create_world_profile(worlds_dir / f"{world_name}.wld")
         finally:
             for path in temporary.values():
                 path.unlink(missing_ok=True)
@@ -147,13 +183,11 @@ class WorldService:
                 raise DomainValidationError(f"World companion is not a regular file: {file.name}")
             files.append(file)
 
-        if world == self._selected_world():
-            self._server_config.set_values({"world": None})
-
         deleted: list[str] = []
         for file in files:
             file.unlink()
             deleted.append(file.name)
+        self._server_config.delete_world_profile(world)
         return deleted
 
     def _replace_world_pair(
@@ -244,13 +278,7 @@ class WorldService:
             raise DomainValidationError("The world name is not safe")
 
     def _selected_world(self) -> Path | None:
-        value = self._server_config.read().values.get("world")
-        if not value:
-            return None
-        try:
-            return self._instances.resolve_in_root(value)
-        except DomainValidationError:
-            return None
+        return self._server_config.selected_world()
 
     def _require_stopped(self) -> None:
         if self._process.snapshot().state not in {ProcessState.STOPPED, ProcessState.FAILED}:

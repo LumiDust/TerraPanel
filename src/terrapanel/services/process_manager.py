@@ -18,6 +18,7 @@ from terrapanel.domain.process import ConsoleEntry, ProcessSnapshot, ProcessStat
 from terrapanel.services.instance_service import InstanceService
 
 type CommandBuilder = Callable[[InstanceRecord], Sequence[str]]
+type ConfigFileResolver = Callable[[], Path]
 
 _LOGGER = logging.getLogger("uvicorn.error")
 
@@ -49,10 +50,12 @@ class ProcessManager:
         instances: InstanceService,
         command_builder: CommandBuilder = build_linux_launch_command,
         *,
+        config_file_resolver: ConfigFileResolver | None = None,
         history_limit: int = 2000,
     ) -> None:
         self._instances = instances
         self._command_builder = command_builder
+        self._config_file_resolver = config_file_resolver
         self._history: deque[ConsoleEntry] = deque(maxlen=history_limit)
         self._sequence = 0
         self._lock = asyncio.Lock()
@@ -70,7 +73,12 @@ class ProcessManager:
                 raise ConflictError("The tModLoader server is already running")
 
             instance = self._instances.require()
-            command = tuple(self._command_builder(instance))
+            launch_instance = instance
+            if self._config_file_resolver is not None:
+                launch_instance = instance.model_copy(
+                    update={"config_file": self._config_file_resolver()}
+                )
+            command = tuple(self._command_builder(launch_instance))
             if not command:
                 raise DomainValidationError("The launch command is empty")
 

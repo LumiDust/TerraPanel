@@ -34,8 +34,11 @@ def build_services(settings: Settings) -> ServiceContainer:
     server_paths.ensure_root()
     repository = InstanceRepository(settings.storage.data_dir / "instance.json")
     instances = InstanceService(repository, server_paths)
-    process = ProcessManager(instances)
     server_config = ServerConfigService(instances)
+    process = ProcessManager(
+        instances,
+        config_file_resolver=server_config.active_config_path,
+    )
     provisioning = ProvisioningService(
         instances,
         server_config,

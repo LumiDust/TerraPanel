@@ -218,7 +218,7 @@ class InstanceService:
             formatted = ", ".join(str(path) for path in missing)
             raise DomainValidationError(f"The tModLoader installation is incomplete: {formatted}")
 
-        for relative in ("Mods", "Worlds", "steamapps/workshop", "logs"):
+        for relative in ("Mods", "Worlds", "WorldConfigs", "steamapps/workshop", "logs"):
             directory = self._resolve_managed(root_dir, relative)
             if directory.exists() and not directory.is_dir():
                 raise DomainValidationError(f"Managed path is not a directory: {directory}")
