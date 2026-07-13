@@ -50,14 +50,54 @@ class ServerConfigService:
 
     def select_world(self, world: str | Path) -> ServerConfigView:
         with self._lock:
-            selected = self._validate_world_path(world, must_exist=True)
-            profile = self._ensure_profile(selected)
+            selected = self._validate_world_path(world, must_exist=False)
+            profile = self._profile_path(selected)
+            if selected.exists():
+                profile = self._ensure_profile(selected)
+            elif not profile.exists():
+                raise DomainValidationError("The selected world does not exist")
             self._set_values_in_path(
                 profile,
                 {"world": selected, "worldname": selected.stem},
             )
             self._write_selection(selected)
             return self._read_path(profile)
+
+    def world_profile_exists(self, world: str | Path) -> bool:
+        with self._lock:
+            target = self._validate_world_path(world, must_exist=False)
+            profile = self._profile_path(target)
+            if not profile.exists():
+                return False
+            managed = self._instances.resolve_in_root(profile, must_exist=True)
+            if not managed.is_file():
+                raise DomainValidationError(
+                    f"World configuration is not a regular file: {managed.name}"
+                )
+            return True
+
+    def world_profiles(self) -> list[tuple[Path, Path, ServerConfigView]]:
+        with self._lock:
+            profiles: list[tuple[Path, Path, ServerConfigView]] = []
+            for candidate in sorted(
+                self._profile_directory().glob("*.txt"),
+                key=lambda path: path.name.casefold(),
+            ):
+                managed = self._instances.resolve_in_root(candidate, must_exist=True)
+                if not managed.is_file():
+                    continue
+                view = self._read_path(managed)
+                configured = view.values.get("world")
+                if not configured:
+                    continue
+                try:
+                    world = self._validate_world_path(configured, must_exist=False)
+                except DomainValidationError:
+                    continue
+                if self._profile_path(world) != managed:
+                    continue
+                profiles.append((world, managed, view))
+            return profiles
 
     def create_world_profile(
         self,
@@ -209,7 +249,7 @@ class ServerConfigService:
             raise DomainValidationError(
                 "World must be a .wld file in the instance Worlds directory"
             )
-        if must_exist and not world.is_file():
+        if world.exists() and not world.is_file():
             raise DomainValidationError("The selected world is not a regular file")
         return world
 

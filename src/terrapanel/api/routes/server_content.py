@@ -9,6 +9,7 @@ from terrapanel.domain.server_content import (
     ModToggle,
     ServerConfigPatch,
     ServerConfigView,
+    WorldCreate,
     WorldInfo,
     WorldSelection,
 )
@@ -31,6 +32,11 @@ def update_server_config(patch: ServerConfigPatch, services: Services) -> Server
 @router.get("/worlds", response_model=list[WorldInfo])
 def list_worlds(services: Services) -> list[WorldInfo]:
     return services.worlds.list()
+
+
+@router.post("/worlds", response_model=WorldInfo, status_code=status.HTTP_201_CREATED)
+def create_world(request: WorldCreate, services: Services) -> WorldInfo:
+    return services.worlds.create(request)
 
 
 @router.post("/worlds/select", response_model=ServerConfigView)

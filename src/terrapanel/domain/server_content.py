@@ -43,6 +43,32 @@ class WorldInfo(BaseModel):
     size: int
     modified_at: datetime
     selected: bool
+    exists: bool = True
+
+
+class WorldCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    world_size: int = Field(default=1, ge=1, le=3)
+    difficulty: int = Field(default=0, ge=0, le=3)
+    seed: str | None = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("world name cannot be empty")
+        return normalized
+
+    @field_validator("seed")
+    @classmethod
+    def normalize_seed(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if any(character in value for character in ("\r", "\n", "\x00")):
+            raise ValueError("seed must be a single line")
+        normalized = value.strip()
+        return normalized or None
 
 
 class WorldSelection(BaseModel):

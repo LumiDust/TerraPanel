@@ -35,6 +35,14 @@ export interface WorldInfo {
   size: number;
   modified_at: string;
   selected: boolean;
+  exists: boolean;
+}
+
+export interface WorldCreateRequest {
+  name: string;
+  world_size: number;
+  difficulty: number;
+  seed: string | null;
 }
 
 export interface FileEntry {
@@ -188,6 +196,11 @@ export const api = {
       body: JSON.stringify(values),
     }),
   worlds: () => request<WorldInfo[]>("/worlds"),
+  createWorld: (values: WorldCreateRequest) =>
+    request<WorldInfo>("/worlds", {
+      method: "POST",
+      body: JSON.stringify(values),
+    }),
   selectWorld: (path: string) =>
     request<ServerConfigView>("/worlds/select", {
       method: "POST",

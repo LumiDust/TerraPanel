@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from terrapanel.domain.errors import ConflictError, DomainValidationError, ResourceNotFoundError
 from terrapanel.domain.process import ProcessSnapshot, ProcessState
-from terrapanel.domain.server_content import ServerConfigView, WorldInfo
+from terrapanel.domain.server_content import ServerConfigView, WorldCreate, WorldInfo
 from terrapanel.services.instance_service import InstanceService
 from terrapanel.services.server_config_service import ServerConfigService
 
@@ -48,7 +48,7 @@ class WorldService:
         instance = self._instances.require()
         worlds_dir = instance.root_dir / "Worlds"
         selected = self._selected_world()
-        worlds: list[WorldInfo] = []
+        worlds: dict[Path, WorldInfo] = {}
         for candidate in sorted(worlds_dir.glob("*.wld"), key=lambda path: path.name.lower()):
             world = self._instances.resolve_in_root(candidate, must_exist=True)
             if not world.is_file() or world.parent != worlds_dir:
@@ -61,26 +61,73 @@ class WorldService:
                     mod_data, must_exist=True
                 ).is_file()
             stat = world.stat()
-            worlds.append(
-                WorldInfo(
-                    name=world.stem,
-                    path=world.relative_to(instance.root_dir).as_posix(),
-                    has_mod_data=has_mod_data,
-                    size=stat.st_size,
-                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
-                    selected=world == selected,
-                )
+            worlds[world] = WorldInfo(
+                name=world.stem,
+                path=world.relative_to(instance.root_dir).as_posix(),
+                has_mod_data=has_mod_data,
+                size=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+                selected=world == selected,
+                exists=True,
             )
-        return worlds
+
+        for world, profile, view in self._server_config.world_profiles():
+            if world in worlds or world.exists():
+                continue
+            values = view.values
+            if values.get("autocreate") not in {"1", "2", "3"}:
+                continue
+            if values.get("worldname", "").strip() != world.stem:
+                continue
+            stat = profile.stat()
+            worlds[world] = WorldInfo(
+                name=world.stem,
+                path=world.relative_to(instance.root_dir).as_posix(),
+                has_mod_data=False,
+                size=0,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+                selected=world == selected,
+                exists=False,
+            )
+        return sorted(worlds.values(), key=lambda item: item.name.casefold())
+
+    def create(self, request: WorldCreate) -> WorldInfo:
+        self._require_stopped()
+        self._validate_world_name(request.name)
+        instance = self._instances.require()
+        world = self._instances.resolve_in_root(
+            instance.root_dir / "Worlds" / f"{request.name}.wld"
+        )
+        if (
+            any(item.name.casefold() == request.name.casefold() for item in self.list())
+            or world.exists()
+            or self._server_config.world_profile_exists(world)
+        ):
+            raise ConflictError(f"A world is already configured: {request.name}")
+
+        self._server_config.create_world_profile(
+            world,
+            {
+                "autocreate": request.world_size,
+                "difficulty": request.difficulty,
+                "seed": request.seed,
+            },
+            select=True,
+        )
+        return next(item for item in self.list() if item.name == request.name)
 
     def select(self, path: str) -> ServerConfigView:
         self._require_stopped()
         instance = self._instances.require()
-        world = self._instances.resolve_in_root(path, must_exist=True)
+        world = self._instances.resolve_in_root(path)
         if world.suffix.lower() != ".wld" or world.parent != instance.root_dir / "Worlds":
             raise ResourceNotFoundError(
                 "World must be a .wld file in the instance Worlds directory"
             )
+        if world.exists() and not world.is_file():
+            raise ResourceNotFoundError("World must be a regular .wld file")
+        if not world.exists() and not self._server_config.world_profile_exists(world):
+            raise ResourceNotFoundError(f"World does not exist: {world.stem}")
         return self._server_config.select_world(world)
 
     def ensure_startable(self) -> None:
@@ -169,8 +216,11 @@ class WorldService:
         self._validate_world_name(name)
         instance = self._instances.require()
         worlds_dir = instance.root_dir / "Worlds"
-        world = self._instances.resolve_in_root(worlds_dir / f"{name}.wld", must_exist=True)
-        if world.parent != worlds_dir or not world.is_file():
+        world = self._instances.resolve_in_root(worlds_dir / f"{name}.wld")
+        profile_exists = self._server_config.world_profile_exists(world)
+        if not world.exists() and not profile_exists:
+            raise ResourceNotFoundError(f"World does not exist: {name}")
+        if world.exists() and (world.parent != worlds_dir or not world.is_file()):
             raise ResourceNotFoundError(f"World does not exist: {name}")
 
         files: list[Path] = []
@@ -273,8 +323,9 @@ class WorldService:
     @staticmethod
     def _validate_world_name(name: str) -> None:
         if not name or len(name) > 120 or any(
-            character in name for character in ("/", "\\", "\r", "\n", "\x00")
-        ):
+            character in name
+            for character in ("/", "\\", "\r", "\n", "\x00", "<", ">", ":", '"', "|", "?", "*")
+        ) or name.endswith((" ", ".")):
             raise DomainValidationError("The world name is not safe")
 
     def _selected_world(self) -> Path | None:

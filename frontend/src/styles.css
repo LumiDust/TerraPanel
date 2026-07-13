@@ -134,6 +134,8 @@ dt { color: #747c86; } dd { margin: 0; overflow-wrap: anywhere; }
 .inline-form input { max-width: 280px; }
 .asset-upload { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; align-items: end; gap: 10px; padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid #e8eaec; }
 .asset-upload .check-row { margin: 0 4px 9px 0; white-space: nowrap; }
+.world-create-form { display: grid; grid-template-columns: minmax(180px, 1fr) 110px 110px minmax(150px, .8fr) auto; align-items: end; gap: 10px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid #e8eaec; }
+.tag.pending { border-color: #dfc581; color: #80651c; }
 .file-picker { position: relative; min-width: 0; }
 .file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .file-picker span { min-height: 38px; display: flex; align-items: center; padding: 0 10px; border: 1px solid #ccd1d5; border-radius: 4px; background: #fff; color: #414850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -219,6 +221,8 @@ button.file-name:hover strong { color: #237a5b; }
   .mod-list { padding-right: 0; }
   .mod-detail { padding: 18px 8px; border-top: 1px solid #e2e5e7; border-left: 0; }
   .file-actions-bar { grid-template-columns: 1fr; }
+  .world-create-form { grid-template-columns: minmax(180px, 1fr) 110px 110px minmax(150px, 1fr); }
+  .world-create-form button { justify-self: start; }
 }
 
 @media (max-width: 720px) {
@@ -249,6 +253,9 @@ button.file-name:hover strong { color: #237a5b; }
   .file-row { grid-template-columns: minmax(0, 1fr) 88px; padding: 7px 0; }
   .file-row > time, .file-heading { display: none; }
   .file-row .row-actions { grid-column: 1 / -1; }
+  .world-create-form { grid-template-columns: 1fr 1fr; }
+  .world-create-form label:first-child, .world-create-form label:nth-child(4), .world-create-form button { grid-column: 1 / -1; }
+  .world-create-form button { width: 100%; }
 }
 
 @media (max-width: 440px) {
@@ -272,4 +279,6 @@ button.file-name:hover strong { color: #237a5b; }
   .file-upload-form { grid-template-columns: 1fr; align-items: stretch; }
   .file-upload-form .check-row { margin: 0; }
   .directory-form { grid-template-columns: 1fr; }
+  .world-create-form { grid-template-columns: 1fr; }
+  .world-create-form label:first-child, .world-create-form label:nth-child(4), .world-create-form button { grid-column: auto; }
 }

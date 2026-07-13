@@ -44,6 +44,7 @@ import {
   type ModInfo,
   type ProvisionRequest,
   type ProvisionSnapshot,
+  type WorldCreateRequest,
   type WorldInfo,
 } from "./api";
 
@@ -78,6 +79,12 @@ const backupLabel = ref("");
 const backupQuery = ref("");
 const worldFiles = ref<File[]>([]);
 const replaceWorld = ref(false);
+const newWorldForm = ref<WorldCreateRequest>({
+  name: "",
+  world_size: 1,
+  difficulty: 0,
+  seed: null,
+});
 const worldFileInput = ref<HTMLInputElement | null>(null);
 const fileListing = ref<DirectoryListing | null>(null);
 const managedFiles = ref<File[]>([]);
@@ -402,6 +409,18 @@ async function saveConfig() {
   await perform(() => api.updateConfig(configForm.value));
 }
 
+async function createWorld() {
+  const name = newWorldForm.value.name.trim();
+  if (!name) return;
+  await perform(async () => {
+    const seed = newWorldForm.value.seed?.trim() || null;
+    await api.createWorld({ ...newWorldForm.value, name, seed });
+    worlds.value = await api.worlds();
+    applyConfig((await api.config()).values);
+    newWorldForm.value = { name: "", world_size: 1, difficulty: 0, seed: null };
+  });
+}
+
 async function selectWorld(path: string) {
   await perform(async () => {
     const config = await api.selectWorld(path);
@@ -429,7 +448,9 @@ async function uploadWorld() {
 function deleteWorld(world: WorldInfo) {
   requestConfirmation({
     title: `删除存档 ${world.name}`,
-    message: world.selected
+    message: !world.exists
+      ? "待创建世界的独立配置将被删除，不会生成存档文件。"
+      : world.selected
       ? "主世界、模组世界数据、直接备份文件和独立配置将一并删除。删除后不会自动选择或创建其他存档。"
       : "主世界、模组世界数据、直接备份文件和独立配置将一并删除。",
     confirmLabel: "删除存档",
@@ -707,7 +728,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div class="actions">
           <button class="icon-button" title="刷新" :disabled="busy" @click="refreshCurrent"><RefreshCw :size="18" /></button>
           <button v-if="configured && !running" class="icon-button" title="更新 tModLoader" :disabled="busy || provisioningRunning || processActionPending" @click="updateServer"><Download :size="18" /></button>
-          <button v-if="configured && !running" class="primary" :disabled="busy || processActionPending" @click="startServer"><Play :size="17" />启动</button>
+          <button v-if="configured && !running" class="primary" :disabled="!activeWorld || busy || processActionPending" @click="startServer"><Play :size="17" />启动</button>
           <button v-if="configured && running" class="danger" :disabled="busy || processActionPending" @click="stopServer"><CircleStop :size="17" />停止</button>
         </div>
       </header>
@@ -847,6 +868,13 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
         <section v-if="activeTab === 'worlds'" class="panel">
           <div class="section-heading"><FolderOpen :size="20" /><div><h2>服务器存档</h2><p>{{ worlds.length }} 个世界</p></div></div>
+          <form class="world-create-form" @submit.prevent="createWorld">
+            <label>世界名称<input v-model="newWorldForm.name" required maxlength="120" :disabled="serverContentLocked || busy" /></label>
+            <label>大小<select v-model.number="newWorldForm.world_size" :disabled="serverContentLocked || busy"><option :value="1">小</option><option :value="2">中</option><option :value="3">大</option></select></label>
+            <label>难度<select v-model.number="newWorldForm.difficulty" :disabled="serverContentLocked || busy"><option :value="0">经典</option><option :value="1">专家</option><option :value="2">大师</option><option :value="3">旅行</option></select></label>
+            <label>种子<input v-model="newWorldForm.seed" maxlength="200" placeholder="随机" :disabled="serverContentLocked || busy" /></label>
+            <button class="primary" :disabled="!newWorldForm.name.trim() || serverContentLocked || busy"><FolderPlus :size="17" />新建世界</button>
+          </form>
           <form class="asset-upload" @submit.prevent="uploadWorld">
             <label class="file-picker">
               <input ref="worldFileInput" type="file" accept=".wld,.twld" multiple :disabled="serverContentLocked || busy" @change="selectWorldFiles" />
@@ -857,8 +885,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </form>
           <div class="table-list">
             <div v-for="world in worlds" :key="world.path" class="table-row">
-              <span><strong>{{ world.name }}</strong><small>{{ formatBytes(world.size) }} · {{ world.has_mod_data ? "Mod" : "Vanilla" }}</small></span>
+              <span><strong>{{ world.name }}</strong><small>{{ world.exists ? `${formatBytes(world.size)} · ${world.has_mod_data ? "Mod" : "Vanilla"}` : "等待首次启动创建" }}</small></span>
               <div class="row-actions">
+                <span v-if="!world.exists" class="tag pending">待创建</span>
                 <span v-if="world.selected" class="tag">当前</span>
                 <button class="icon-button" title="设为当前" :disabled="world.selected || serverContentLocked || busy" @click="selectWorld(world.path)"><Check :size="17" /></button>
                 <button class="icon-button danger-icon" title="删除存档" :disabled="serverContentLocked || busy" @click="deleteWorld(world)"><Trash2 :size="17" /></button>

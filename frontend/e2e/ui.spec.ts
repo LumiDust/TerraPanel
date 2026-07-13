@@ -39,6 +39,7 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       size: 5242880,
       modified_at: "2026-07-12T00:00:00Z",
       selected: true,
+      exists: true,
     },
   ];
   const controls = { stopDelayMs: 0 };
@@ -49,8 +50,9 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       if (path.startsWith("/api/v1/worlds/")) {
         const name = decodeURIComponent(path.slice("/api/v1/worlds/".length));
         const worldIndex = worldsOutput.findIndex((world) => world.name === name);
+        const deleted = worldIndex >= 0 ? worldsOutput[worldIndex] : null;
         if (worldIndex >= 0) worldsOutput.splice(worldIndex, 1);
-        await route.fulfill({ json: [`${name}.wld`, `${name}.twld`] });
+        await route.fulfill({ json: deleted?.exists ? [`${name}.wld`, `${name}.twld`] : [] });
       } else {
         await route.fulfill({ status: 204 });
       }
@@ -72,6 +74,20 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     } else if (path === "/api/v1/provisioning/logs") body = [];
     else if (path === "/api/v1/server-config") {
       body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
+    } else if (path === "/api/v1/worlds" && route.request().method() === "POST") {
+      const payload = route.request().postDataJSON() as { name: string };
+      for (const world of worldsOutput) world.selected = false;
+      const created = {
+        name: payload.name,
+        path: `Worlds/${payload.name}.wld`,
+        has_mod_data: false,
+        size: 0,
+        modified_at: "2026-07-13T00:00:00Z",
+        selected: true,
+        exists: false,
+      };
+      worldsOutput.push(created);
+      body = created;
     } else if (path === "/api/v1/worlds") {
       body = worldsOutput;
     } else if (path === "/api/v1/worlds/select") {
@@ -443,10 +459,23 @@ test("world saves can be imported and managed", async ({ page }) => {
   await dialog.getByRole("button", { name: "删除存档" }).click();
   await deletion;
   await expect(page.getByText("TerraPrime")).toBeHidden();
+  await expect(page.getByRole("button", { name: "启动" })).toBeDisabled();
   await page.getByRole("button", { name: "服务器" }).click();
   await expect(page.getByText("未选择存档")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
   await page.getByRole("button", { name: "存档" }).click();
+  await page.getByLabel("世界名称").fill("ManualWorld");
+  await page.getByLabel("大小").selectOption("2");
+  await page.getByLabel("难度").selectOption("1");
+  await page.getByLabel("种子").fill("stage53-seed");
+  const creation = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/worlds") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "新建世界" }).click();
+  await creation;
+  await expect(page.getByText("ManualWorld")).toBeVisible();
+  await expect(page.getByText("待创建")).toBeVisible();
+  await expect(page.getByRole("button", { name: "启动" })).toBeEnabled();
   await page.locator('input[accept=".wld,.twld"]').setInputFiles([
     {
       name: "Imported.wld",
@@ -477,6 +506,8 @@ test("world save management fits mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page.getByRole("button", { name: "存档" }).click();
+  await expect(page.getByLabel("世界名称")).toBeVisible();
+  await expect(page.getByRole("button", { name: "新建世界" })).toBeDisabled();
   await expect(page.getByText("选择 .wld / .twld")).toBeVisible();
   await expect(page.getByRole("button", { name: "导入" })).toBeDisabled();
   await expectNoHorizontalOverflow(page);
