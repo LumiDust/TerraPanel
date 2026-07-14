@@ -14,11 +14,18 @@ from terrapanel.domain.errors import (
     UnsupportedPlatformError,
 )
 from terrapanel.domain.instance import InstanceRecord
-from terrapanel.domain.process import ConsoleEntry, ProcessSnapshot, ProcessState
+from terrapanel.domain.process import (
+    ConsoleEntry,
+    ProcessEvent,
+    ProcessEventType,
+    ProcessSnapshot,
+    ProcessState,
+)
 from terrapanel.services.instance_service import InstanceService
 
 type CommandBuilder = Callable[[InstanceRecord], Sequence[str]]
 type ConfigFileResolver = Callable[[], Path]
+type ProcessEventListener = Callable[[ProcessEvent], None]
 
 _LOGGER = logging.getLogger("uvicorn.error")
 
@@ -66,6 +73,7 @@ class ProcessManager:
         self._exit_code: int | None = None
         self._stop_requested = False
         self._console_log: Path | None = None
+        self._event_listeners: list[ProcessEventListener] = []
 
     async def start(self) -> ProcessSnapshot:
         async with self._lock:
@@ -101,12 +109,14 @@ class ProcessManager:
             except OSError as error:
                 self._state = ProcessState.FAILED
                 self._record("system", f"Failed to start server: {error}")
+                self._emit_event(ProcessEventType.FAILED, message=str(error))
                 raise DomainValidationError(f"Failed to start tModLoader: {error}") from error
 
             self._process = process
             self._started_at = datetime.now(UTC)
             self._state = ProcessState.RUNNING
             self._reader_task = asyncio.create_task(self._read_output(process))
+            self._emit_event(ProcessEventType.STARTED)
             return self.snapshot()
 
     async def stop(self, *, timeout_seconds: float = 30.0) -> ProcessSnapshot:
@@ -176,6 +186,10 @@ class ProcessManager:
     def is_running(self) -> bool:
         return self._is_running()
 
+    def add_event_listener(self, listener: ProcessEventListener) -> None:
+        if listener not in self._event_listeners:
+            self._event_listeners.append(listener)
+
     async def close(self) -> None:
         if self._is_running():
             await self.stop(timeout_seconds=10.0)
@@ -209,6 +223,12 @@ class ProcessManager:
             else:
                 self._state = ProcessState.FAILED
             self._record("system", f"Server exited with code {exit_code}")
+            event_type = (
+                ProcessEventType.STOPPED
+                if self._stop_requested or exit_code == 0
+                else ProcessEventType.FAILED
+            )
+            self._emit_event(event_type, exit_code=exit_code)
 
     def _record(self, stream: str, text: str) -> None:
         self._sequence += 1
@@ -224,6 +244,25 @@ class ProcessManager:
         if self._console_log is not None:
             with self._console_log.open("a", encoding="utf-8") as file:
                 file.write(f"{entry.timestamp.isoformat()} [{stream}] {text}\n")
+
+    def _emit_event(
+        self,
+        event_type: ProcessEventType,
+        *,
+        exit_code: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        event = ProcessEvent(
+            type=event_type,
+            timestamp=datetime.now(UTC),
+            exit_code=exit_code,
+            message=message,
+        )
+        for listener in tuple(self._event_listeners):
+            try:
+                listener(event)
+            except Exception:
+                _LOGGER.exception("Process event listener failed")
 
     @staticmethod
     def _terminate(process: asyncio.subprocess.Process) -> None:

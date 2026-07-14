@@ -12,6 +12,12 @@ class ProcessState(StrEnum):
     FAILED = "failed"
 
 
+class ProcessEventType(StrEnum):
+    STARTED = "started"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
 class ProcessSnapshot(BaseModel):
     state: ProcessState
     pid: int | None = None
@@ -24,6 +30,13 @@ class ConsoleEntry(BaseModel):
     timestamp: datetime
     stream: str
     text: str
+
+
+class ProcessEvent(BaseModel):
+    type: ProcessEventType
+    timestamp: datetime
+    exit_code: int | None = None
+    message: str | None = None
 
 
 class ConsoleCommand(BaseModel):

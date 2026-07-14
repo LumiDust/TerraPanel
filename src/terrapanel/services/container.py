@@ -4,6 +4,7 @@ from terrapanel.config import Settings
 from terrapanel.path_policy import PathPolicy
 from terrapanel.repository.instance_repository import InstanceRepository
 from terrapanel.repository.provision_repository import ProvisionRepository
+from terrapanel.repository.task_repository import TaskRepository
 from terrapanel.services.backup_service import BackupService
 from terrapanel.services.file_service import FileService
 from terrapanel.services.instance_service import InstanceService
@@ -13,6 +14,7 @@ from terrapanel.services.official_installer import OfficialGithubInstaller
 from terrapanel.services.process_manager import ProcessManager
 from terrapanel.services.provisioning_service import ProvisioningService
 from terrapanel.services.server_config_service import ServerConfigService
+from terrapanel.services.task_service import TaskService
 from terrapanel.services.world_service import WorldService
 
 
@@ -27,6 +29,7 @@ class ServiceContainer:
     backups: BackupService
     files: FileService
     provisioning: ProvisioningService
+    tasks: TaskService
 
 
 def build_services(settings: Settings) -> ServiceContainer:
@@ -46,19 +49,31 @@ def build_services(settings: Settings) -> ServiceContainer:
         OfficialGithubInstaller(),
         ProvisionRepository(settings.storage.data_dir / "provisioning.json"),
     )
+    worlds = WorldService(
+        instances,
+        server_config,
+        process,
+        max_upload_size=settings.worlds.max_upload_size,
+    )
+    backups = BackupService(instances, process, settings.storage.backups_dir)
+    tasks = TaskService(
+        TaskRepository(
+            settings.storage.data_dir / "tasks.json",
+            settings.storage.data_dir / "task-runs.json",
+        ),
+        process,
+        worlds,
+        backups,
+        provisioning,
+    )
     return ServiceContainer(
         instances=instances,
         process=process,
         server_config=server_config,
-        worlds=WorldService(
-            instances,
-            server_config,
-            process,
-            max_upload_size=settings.worlds.max_upload_size,
-        ),
+        worlds=worlds,
         mods=ModService(instances, process, max_upload_size=settings.mods.max_upload_size),
         logs=LogService(instances),
-        backups=BackupService(instances, process, settings.storage.backups_dir),
+        backups=backups,
         files=FileService(
             instances,
             process,
@@ -67,4 +82,5 @@ def build_services(settings: Settings) -> ServiceContainer:
             max_expanded_size=settings.files.max_expanded_size,
         ),
         provisioning=provisioning,
+        tasks=tasks,
     )

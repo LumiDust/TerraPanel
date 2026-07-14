@@ -42,6 +42,45 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       exists: true,
     },
   ];
+  const taskOutput = [
+    {
+      id: "task-schedule-1",
+      name: "每小时状态广播",
+      enabled: true,
+      trigger: { type: "interval", interval_seconds: 3600, start_at: "2026-07-12T03:00:00Z" },
+      actions: [{ type: "command", command: "say Server is healthy" }],
+      created_at: "2026-07-12T03:00:00Z",
+      updated_at: "2026-07-12T03:00:00Z",
+      next_run_at: "2026-07-12T04:00:00Z",
+      running: false,
+      last_run: null,
+    },
+    {
+      id: "task-event-1",
+      name: "异常退出自动恢复",
+      enabled: true,
+      trigger: { type: "event", event: "server_failed", cooldown_seconds: 30 },
+      actions: [{ type: "wait", delay_seconds: 10 }, { type: "start" }],
+      created_at: "2026-07-12T03:00:00Z",
+      updated_at: "2026-07-12T03:00:00Z",
+      next_run_at: null,
+      running: false,
+      last_run: null,
+    },
+  ];
+  const taskRuns = [
+    {
+      id: "run-1",
+      task_id: "task-schedule-1",
+      task_name: "每小时状态广播",
+      source: "schedule",
+      event: null,
+      status: "success",
+      started_at: "2026-07-12T03:00:00Z",
+      finished_at: "2026-07-12T03:00:01Z",
+      message: "Completed 1 action(s)",
+    },
+  ];
   const controls = { stopDelayMs: 0 };
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -53,6 +92,11 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
         const deleted = worldIndex >= 0 ? worldsOutput[worldIndex] : null;
         if (worldIndex >= 0) worldsOutput.splice(worldIndex, 1);
         await route.fulfill({ json: deleted?.exists ? [`${name}.wld`, `${name}.twld`] : [] });
+      } else if (path.startsWith("/api/v1/tasks/")) {
+        const id = decodeURIComponent(path.slice("/api/v1/tasks/".length));
+        const index = taskOutput.findIndex((task) => task.id === id);
+        if (index >= 0) taskOutput.splice(index, 1);
+        await route.fulfill({ status: 204 });
       } else {
         await route.fulfill({ status: 204 });
       }
@@ -105,6 +149,57 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       body = [
         { id: "20260712T031500000000Z-manual", created_at: "2026-07-12T03:15:00Z", size: 7340032, world_files: 1 },
       ];
+    } else if (path === "/api/v1/tasks/runs") {
+      body = taskRuns;
+    } else if (path === "/api/v1/tasks" && route.request().method() === "POST") {
+      const payload = route.request().postDataJSON() as typeof taskOutput[number];
+      const created = {
+        ...payload,
+        id: `task-${taskOutput.length + 1}`,
+        created_at: "2026-07-12T03:20:00Z",
+        updated_at: "2026-07-12T03:20:00Z",
+        next_run_at: payload.trigger.type === "event" ? null : "2026-07-12T05:00:00Z",
+        running: false,
+        last_run: null,
+      };
+      taskOutput.push(created);
+      body = created;
+    } else if (path === "/api/v1/tasks") {
+      body = taskOutput;
+    } else if (path.endsWith("/enabled") && path.startsWith("/api/v1/tasks/")) {
+      const id = path.split("/").at(-2);
+      const payload = route.request().postDataJSON() as { enabled: boolean };
+      const task = taskOutput.find((entry) => entry.id === id);
+      if (task) {
+        task.enabled = payload.enabled;
+        task.next_run_at = payload.enabled && task.trigger.type !== "event"
+          ? "2026-07-12T05:00:00Z"
+          : null;
+      }
+      body = task;
+    } else if (path.endsWith("/run") && path.startsWith("/api/v1/tasks/")) {
+      const id = path.split("/").at(-2);
+      const task = taskOutput.find((entry) => entry.id === id)!;
+      const run = {
+        id: `run-${taskRuns.length + 1}`,
+        task_id: task.id,
+        task_name: task.name,
+        source: "manual",
+        event: null,
+        status: "success",
+        started_at: "2026-07-12T03:21:00Z",
+        finished_at: "2026-07-12T03:21:01Z",
+        message: `Completed ${task.actions.length} action(s)`,
+      };
+      taskRuns.unshift(run);
+      task.last_run = run;
+      body = run;
+    } else if (path.startsWith("/api/v1/tasks/") && route.request().method() === "PUT") {
+      const id = decodeURIComponent(path.slice("/api/v1/tasks/".length));
+      const task = taskOutput.find((entry) => entry.id === id)!;
+      const payload = route.request().postDataJSON() as typeof task;
+      Object.assign(task, payload, { updated_at: "2026-07-12T03:22:00Z" });
+      body = task;
     } else if (path === "/api/v1/files" && route.request().method() === "GET") {
       const directory = url.searchParams.get("path") ?? "";
       body = directory === "Mods"
@@ -156,7 +251,7 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     else if (path.endsWith("/console")) body = { status: "accepted" };
     await route.fulfill({ json: body });
   });
-  return { consoleOutput, controls, modsOutput };
+  return { consoleOutput, controls, modsOutput, taskOutput, taskRuns };
 }
 
 async function mockInstallingApi(page: Page) {
@@ -321,6 +416,55 @@ test("configured mobile overview fits", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/configured-mobile.png", fullPage: true });
+});
+
+test("scheduled tasks can be created and run", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "任务" }).click();
+  await expect(page.locator(".task-row").filter({ hasText: "每小时状态广播" })).toBeVisible();
+  await expect(page.getByText("Completed 1 action(s)")).toBeVisible();
+
+  await page.getByRole("button", { name: "新建任务" }).click();
+  await page.getByLabel("名称").fill("每两小时备份");
+  await page.getByLabel("间隔秒数").fill("7200");
+  const createRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/tasks") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "保存任务" }).click();
+  await createRequest;
+  const createdRow = page.locator(".task-row").filter({ hasText: "每两小时备份" });
+  await expect(createdRow).toBeVisible();
+
+  const runRequest = page.waitForRequest(
+    (request) => request.url().includes("/api/v1/tasks/") && request.url().endsWith("/run"),
+  );
+  await createdRow.getByTitle("立即运行").click();
+  await runRequest;
+  await expect(page.locator(".history-row").filter({ hasText: "每两小时备份" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/tasks-desktop.png", fullPage: true });
+});
+
+test("event task editor fits mobile", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "任务" }).click();
+  await page.getByLabel("任务类型").getByRole("button", { name: "事件任务" }).click();
+  await expect(page.getByText("异常退出自动恢复")).toBeVisible();
+  await page.getByRole("button", { name: "新建任务" }).click();
+  await page.getByLabel("名称").fill("启动后欢迎");
+  await page.getByLabel("触发事件").selectOption("server_started");
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/event-task-mobile.png", fullPage: true });
 });
 
 test("local mod upload is usable", async ({ page }) => {

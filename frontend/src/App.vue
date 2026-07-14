@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   ArrowDownToLine,
   Boxes,
+  CalendarClock,
   Check,
   ChevronRight,
   CircleStop,
@@ -47,8 +48,9 @@ import {
   type WorldCreateRequest,
   type WorldInfo,
 } from "./api";
+import TaskManager from "./components/TaskManager.vue";
 
-type Tab = "overview" | "console" | "config" | "worlds" | "files" | "mods" | "backups" | "logs";
+type Tab = "overview" | "console" | "tasks" | "config" | "worlds" | "files" | "mods" | "backups" | "logs";
 type ModFilter = "all" | "enabled" | "disabled" | "local" | "workshop";
 
 interface PendingConfirmation {
@@ -124,6 +126,7 @@ const setupForm = ref<ProvisionRequest>({
 });
 const consoleView = ref<HTMLElement | null>(null);
 const provisioningView = ref<HTMLElement | null>(null);
+const taskManager = ref<InstanceType<typeof TaskManager> | null>(null);
 const consoleFollowing = ref(true);
 const provisioningFollowing = ref(true);
 let timer: number | undefined;
@@ -197,6 +200,7 @@ const fileBreadcrumbs = computed(() => {
 const tabs: Array<{ id: Tab; label: string; icon: typeof Gauge }> = [
   { id: "overview", label: "概览", icon: Gauge },
   { id: "console", label: "控制台", icon: SquareTerminal },
+  { id: "tasks", label: "任务", icon: CalendarClock },
   { id: "config", label: "服务器", icon: FileCog },
   { id: "worlds", label: "存档", icon: FolderOpen },
   { id: "files", label: "文件", icon: Files },
@@ -331,6 +335,10 @@ async function selectTab(tab: Tab) {
 }
 
 function refreshCurrent() {
+  if (activeTab.value === "tasks") {
+    void perform(async () => taskManager.value?.refresh());
+    return;
+  }
   void perform(() => activeTab.value === "files" ? refreshFiles() : refreshAll());
 }
 
@@ -854,6 +862,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <button class="icon-button" title="发送" :disabled="!running || busy"><Send :size="18" /></button>
           </form>
         </section>
+
+        <TaskManager v-if="activeTab === 'tasks'" ref="taskManager" @error="error = $event" />
 
         <section v-if="activeTab === 'config'" class="panel">
             <div class="section-heading"><FileCog :size="20" /><div><h2>服务器配置</h2><p>{{ activeWorld ? `${activeWorld.name} · 独立配置` : "未选择存档" }}</p></div></div>

@@ -32,9 +32,11 @@ def create_app(
         app.state.settings = app_settings
         app_services = services or build_services(app_settings)
         app.state.services = app_services
+        await app_services.tasks.start()
         try:
             yield
         finally:
+            await app_services.tasks.close()
             await app_services.provisioning.close()
             await app_services.process.close()
 

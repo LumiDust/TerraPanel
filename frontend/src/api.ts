@@ -92,6 +92,76 @@ export interface BackupInfo {
   world_files: number;
 }
 
+export type TaskActionType = "wait" | "start" | "stop" | "restart" | "command" | "backup";
+export type TaskEventType = "panel_started" | "server_started" | "server_stopped" | "server_failed";
+export type TaskRunSource = "schedule" | "event" | "manual";
+export type TaskRunStatus = "running" | "success" | "failed" | "skipped";
+
+export interface TaskAction {
+  type: TaskActionType;
+  command?: string | null;
+  delay_seconds?: number | null;
+  backup_label?: string | null;
+}
+
+export interface IntervalTaskTrigger {
+  type: "interval";
+  interval_seconds: number;
+  start_at?: string | null;
+}
+
+export interface WeeklyTaskTrigger {
+  type: "weekly";
+  weekdays: number[];
+  at_time: string;
+  timezone: string;
+}
+
+export interface OnceTaskTrigger {
+  type: "once";
+  run_at: string;
+}
+
+export interface EventTaskTrigger {
+  type: "event";
+  event: TaskEventType;
+  cooldown_seconds: number;
+}
+
+export type TaskTrigger =
+  | IntervalTaskTrigger
+  | WeeklyTaskTrigger
+  | OnceTaskTrigger
+  | EventTaskTrigger;
+
+export interface TaskRequest {
+  name: string;
+  enabled: boolean;
+  trigger: TaskTrigger;
+  actions: TaskAction[];
+}
+
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  task_name: string;
+  source: TaskRunSource;
+  event: TaskEventType | null;
+  status: TaskRunStatus;
+  started_at: string;
+  finished_at: string | null;
+  message: string | null;
+}
+
+export interface TaskInfo extends TaskRequest {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  next_run_at: string | null;
+  running: boolean;
+  last_run: TaskRun | null;
+}
+
 export interface LogView {
   source: string;
   path: string | null;
@@ -296,5 +366,31 @@ export const api = {
     `/api/v1/backups/${encodeURIComponent(id)}/download`,
   deleteBackup: (id: string) =>
     request<void>(`/backups/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  tasks: (kind?: "schedule" | "event") =>
+    request<TaskInfo[]>(`/tasks${kind ? `?kind=${kind}` : ""}`),
+  taskRuns: (taskId?: string, limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (taskId) query.set("task_id", taskId);
+    return request<TaskRun[]>(`/tasks/runs?${query}`);
+  },
+  createTask: (values: TaskRequest) =>
+    request<TaskInfo>("/tasks", {
+      method: "POST",
+      body: JSON.stringify(values),
+    }),
+  updateTask: (id: string, values: TaskRequest) =>
+    request<TaskInfo>(`/tasks/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(values),
+    }),
+  setTaskEnabled: (id: string, enabled: boolean) =>
+    request<TaskInfo>(`/tasks/${encodeURIComponent(id)}/enabled`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  runTask: (id: string) =>
+    request<TaskRun>(`/tasks/${encodeURIComponent(id)}/run`, { method: "POST" }),
+  deleteTask: (id: string) =>
+    request<void>(`/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   log: (source: string) => request<LogView>(`/logs/${source}?lines=500`),
 };
