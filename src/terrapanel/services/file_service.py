@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import stat
@@ -6,6 +7,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from threading import RLock
 from typing import Protocol
 from uuid import uuid4
 
@@ -15,12 +17,18 @@ from terrapanel.domain.files import (
     ArchivePreview,
     DirectoryListing,
     FileEntry,
+    TextFileUpdate,
+    TextFileView,
 )
 from terrapanel.domain.process import ProcessSnapshot, ProcessState
 from terrapanel.services.instance_service import InstanceService
 
 _COPY_CHUNK_SIZE = 1024 * 1024
 _INTERNAL_PREFIXES = (".upload-", ".extract-", ".extract-backup-")
+_MAX_TEXT_SIZE = 512 * 1024
+_TEXT_SUFFIXES = frozenset(
+    {".bat", ".cfg", ".cmd", ".ini", ".json", ".ps1", ".sh", ".toml", ".txt", ".yaml", ".yml"}
+)
 
 
 class _ProcessStatus(Protocol):
@@ -59,6 +67,7 @@ class FileService:
         self._max_upload_size = max_upload_size
         self._max_archive_entries = max_archive_entries
         self._max_expanded_size = max_expanded_size
+        self._text_lock = RLock()
 
     def list(self, directory: str = "") -> DirectoryListing:
         instance = self._instances.require()
@@ -157,6 +166,60 @@ class FileService:
         if not target.is_file():
             raise DomainValidationError(f"Path is not a regular file: {path}")
         return target
+
+    def read_text(self, path: str) -> TextFileView:
+        with self._text_lock:
+            instance = self._instances.require()
+            target = self.download_path(path)
+            self._require_text_file(target)
+            try:
+                raw = target.read_bytes()
+            except OSError as error:
+                raise DomainValidationError(f"Cannot read text file: {error}") from error
+            if len(raw) > _MAX_TEXT_SIZE:
+                raise DomainValidationError(f"Text files cannot exceed {_MAX_TEXT_SIZE} bytes")
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise DomainValidationError("Text files must use UTF-8 encoding") from error
+            if "\x00" in content:
+                raise DomainValidationError("Binary files cannot be edited as text")
+            return TextFileView(
+                path=target.relative_to(instance.root_dir).as_posix(),
+                content=content,
+                revision=hashlib.sha256(raw).hexdigest(),
+                size=len(raw),
+            )
+
+    def update_text(self, request: TextFileUpdate) -> TextFileView:
+        self._require_stopped()
+        with self._text_lock:
+            target = self.download_path(request.path)
+            self._require_text_file(target)
+            try:
+                current = target.read_bytes()
+            except OSError as error:
+                raise DomainValidationError(f"Cannot read text file: {error}") from error
+            if hashlib.sha256(current).hexdigest() != request.revision:
+                raise ConflictError("The file changed after it was opened; reload it")
+
+            encoded = request.content.encode("utf-8")
+            if len(encoded) > _MAX_TEXT_SIZE:
+                raise DomainValidationError(f"Text files cannot exceed {_MAX_TEXT_SIZE} bytes")
+            if b"\x00" in encoded:
+                raise DomainValidationError("Binary content cannot be saved as text")
+
+            temporary = target.parent / f".upload-{uuid4().hex}.tmp"
+            try:
+                mode = stat.S_IMODE(target.stat().st_mode)
+                temporary.write_bytes(encoded)
+                os.chmod(temporary, mode)
+                os.replace(temporary, target)
+            except OSError as error:
+                raise DomainValidationError(f"Cannot save text file: {error}") from error
+            finally:
+                temporary.unlink(missing_ok=True)
+            return self.read_text(request.path)
 
     def move(self, source: str, destination: str, *, replace: bool = False) -> FileEntry:
         self._require_stopped()
@@ -524,6 +587,11 @@ class FileService:
     def _as_posix(path: Path) -> str:
         value = path.as_posix()
         return "" if value == "." else value
+
+    @staticmethod
+    def _require_text_file(path: Path) -> None:
+        if path.suffix.casefold() not in _TEXT_SUFFIXES:
+            raise DomainValidationError(f"This file type cannot be edited as text: {path.name}")
 
     def _require_stopped(self) -> None:
         if self._process.snapshot().state not in {ProcessState.STOPPED, ProcessState.FAILED}:

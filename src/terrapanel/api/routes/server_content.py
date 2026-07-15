@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
 from terrapanel.api.dependencies import get_services
+from terrapanel.domain.errors import ConflictError
 from terrapanel.domain.server_content import (
     LogView,
     ModInfo,
@@ -13,6 +14,7 @@ from terrapanel.domain.server_content import (
     WorldInfo,
     WorldSelection,
 )
+from terrapanel.domain.startup import SpamCheckStatus
 from terrapanel.services.container import ServiceContainer
 
 router = APIRouter(tags=["server content"])
@@ -27,6 +29,20 @@ def get_server_config(services: Services) -> ServerConfigView:
 @router.patch("/server-config", response_model=ServerConfigView)
 def update_server_config(patch: ServerConfigPatch, services: Services) -> ServerConfigView:
     return services.server_config.update(patch)
+
+
+@router.get("/server-config/spam-check", response_model=SpamCheckStatus)
+def get_spam_check_status(services: Services) -> SpamCheckStatus:
+    return services.startup_settings.spam_check()
+
+
+@router.post("/server-config/spam-check/disable", response_model=SpamCheckStatus)
+def disable_spam_check(services: Services) -> SpamCheckStatus:
+    if services.process.is_running():
+        raise ConflictError("Stop the tModLoader server before changing startup settings")
+    if services.provisioning.is_running():
+        raise ConflictError("Wait for installation or update to finish")
+    return services.startup_settings.disable_spam_check()
 
 
 @router.get("/worlds", response_model=list[WorldInfo])

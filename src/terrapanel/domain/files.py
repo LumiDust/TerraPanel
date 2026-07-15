@@ -29,6 +29,19 @@ class FileMove(BaseModel):
     replace: bool = False
 
 
+class TextFileView(BaseModel):
+    path: str
+    content: str
+    revision: str
+    size: int
+
+
+class TextFileUpdate(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    content: str = Field(max_length=512 * 1024)
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ArchivePreview(BaseModel):
     path: str
     files: int

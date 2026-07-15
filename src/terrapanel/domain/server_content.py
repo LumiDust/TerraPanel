@@ -14,14 +14,14 @@ class ServerConfigPatch(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     password: str | None = Field(default=None, max_length=128)
     motd: str | None = Field(default=None, max_length=500)
-    worldpath: str | None = None
-    banlist: str | None = None
+    worldpath: str | None = Field(default=None, max_length=1024)
+    banlist: str | None = Field(default=None, max_length=1024)
     secure: bool | None = None
     language: str | None = Field(default=None, min_length=2, max_length=20)
     upnp: bool | None = None
     npcstream: int | None = Field(default=None, ge=0)
     priority: int | None = Field(default=None, ge=0, le=5)
-    modpath: str | None = None
+    modpath: str | None = Field(default=None, max_length=1024)
     modpack: str | None = Field(default=None, max_length=200)
 
     @field_validator("worldname", "modpack")
@@ -30,6 +30,16 @@ class ServerConfigPatch(BaseModel):
         if value is not None and any(character in value for character in ("\r", "\n", "\x00")):
             raise ValueError("value must be a single line")
         return value
+
+    @field_validator("worldpath", "banlist", "modpath")
+    @classmethod
+    def normalize_optional_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if any(character in value for character in ("\r", "\n", "\x00")):
+            raise ValueError("path must be a single line")
+        normalized = value.strip()
+        return normalized or None
 
 
 class ServerConfigView(BaseModel):

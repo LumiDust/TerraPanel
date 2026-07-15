@@ -27,6 +27,8 @@ import {
   Search,
   Send,
   Server,
+  ShieldCheck,
+  ShieldOff,
   SquareTerminal,
   Trash2,
   Upload,
@@ -45,6 +47,8 @@ import {
   type ModInfo,
   type ProvisionRequest,
   type ProvisionSnapshot,
+  type SpamCheckStatus,
+  type TextFileView,
   type WorldCreateRequest,
   type WorldInfo,
 } from "./api";
@@ -59,6 +63,21 @@ interface PendingConfirmation {
   confirmLabel: string;
   danger?: boolean;
   action: () => Promise<void>;
+}
+
+interface ServerConfigForm {
+  maxplayers: number;
+  port: number;
+  password: string;
+  motd: string;
+  language: string;
+  secure: boolean;
+  upnp: boolean;
+  npcstream: number | "";
+  priority: number;
+  banlist: string;
+  modpath: string;
+  modpack: string;
 }
 
 const activeTab = ref<Tab>("overview");
@@ -108,7 +127,23 @@ const modFilter = ref<ModFilter>("all");
 const selectedModKey = ref("");
 const logQuery = ref("");
 const pendingConfirmation = ref<PendingConfirmation | null>(null);
-const configForm = ref({ maxplayers: 8, port: 7777, password: "", motd: "" });
+const configForm = ref<ServerConfigForm>({
+  maxplayers: 8,
+  port: 7777,
+  password: "",
+  motd: "",
+  language: "",
+  secure: true,
+  upnp: false,
+  npcstream: "",
+  priority: 1,
+  banlist: "",
+  modpath: "",
+  modpack: "",
+});
+const spamCheck = ref<SpamCheckStatus | null>(null);
+const textFile = ref<TextFileView | null>(null);
+const textFileContent = ref("");
 const setupForm = ref<ProvisionRequest>({
   name: "Primary Server",
   root_dir: "primary",
@@ -134,6 +169,25 @@ let pollInFlight = false;
 
 const scrollEndThreshold = 48;
 const maxConsoleEntries = 500;
+const languageOptions = [
+  ["en-US", "English"],
+  ["de-DE", "Deutsch"],
+  ["it-IT", "Italiano"],
+  ["fr-FR", "Français"],
+  ["es-ES", "Español"],
+  ["ru-RU", "Русский"],
+  ["zh-Hans", "简体中文"],
+  ["pt-BR", "Português"],
+  ["pl-PL", "Polski"],
+] as const;
+const priorityOptions = [
+  [0, "实时"],
+  [1, "高"],
+  [2, "高于正常"],
+  [3, "正常"],
+  [4, "低于正常"],
+  [5, "空闲"],
+] as const;
 
 const configured = computed(() => instance.value?.configured === true);
 const running = computed(() => instance.value?.process.state === "running");
@@ -157,6 +211,14 @@ const statusLabel = computed(() => {
   return { running: "运行中", starting: "启动中", stopping: "停止中", failed: "异常", stopped: "已停止" }[state];
 });
 const activeWorld = computed(() => worlds.value.find((world) => world.selected) ?? null);
+const textFileDirty = computed(() => textFile.value?.content !== textFileContent.value);
+const spamCheckLabel = computed(() => {
+  if (!spamCheck.value?.config_path) return "无活动配置";
+  if (spamCheck.value.secure_launch_argument) return "启动参数冲突";
+  if (spamCheck.value.protection_disabled) return "已明确关闭";
+  if (spamCheck.value.secure_enabled === true) return "已启用";
+  return "未明确设置";
+});
 const enabledMods = computed(() => mods.value.filter((mod) => mod.enabled));
 const filteredMods = computed(() => {
   const query = modQuery.value.trim().toLowerCase();
@@ -249,26 +311,43 @@ async function refreshInstance() {
 }
 
 function applyConfig(values: Record<string, string>) {
+  const secure = values.secure?.trim().toLowerCase();
+  const upnp = values.upnp?.trim().toLowerCase();
   configForm.value = {
     maxplayers: Number(values.maxplayers ?? 8),
     port: Number(values.port ?? 7777),
     password: values.password ?? "",
     motd: values.motd ?? "",
+    language: values.language ?? "",
+    secure: ["1", "true", "yes", "on"].includes(secure ?? ""),
+    upnp: ["1", "true", "yes", "on"].includes(upnp ?? ""),
+    npcstream: values.npcstream === undefined ? "" : Number(values.npcstream),
+    priority: Number(values.priority ?? 1),
+    banlist: values.banlist ?? "",
+    modpath: values.modpath ?? "",
+    modpack: values.modpack ?? "",
   };
+}
+
+function optionalText(value: string, trim = false): string | null {
+  const normalized = trim ? value.trim() : value;
+  return normalized === "" ? null : normalized;
 }
 
 async function refreshAll() {
   await refreshInstance();
   if (!configured.value) return;
-  const [config, worldList, modList, backupList] = await Promise.all([
+  const [config, worldList, modList, backupList, spamStatus] = await Promise.all([
     api.config(),
     api.worlds(),
     api.mods(),
     api.backups(),
+    api.spamCheck(),
   ]);
   worlds.value = worldList;
   mods.value = modList;
   backups.value = backupList;
+  spamCheck.value = spamStatus;
   applyConfig(config.values);
   await refreshConsole();
 }
@@ -414,7 +493,42 @@ async function sendCommand() {
 }
 
 async function saveConfig() {
-  await perform(() => api.updateConfig(configForm.value));
+  await perform(async () => {
+    const values = configForm.value;
+    const updated = await api.updateConfig({
+      maxplayers: values.maxplayers,
+      port: values.port,
+      password: optionalText(values.password),
+      motd: optionalText(values.motd),
+      language: optionalText(values.language),
+      secure: values.secure,
+      upnp: values.upnp,
+      npcstream: values.npcstream === "" ? null : values.npcstream,
+      priority: values.priority,
+      banlist: optionalText(values.banlist, true),
+      modpath: optionalText(values.modpath, true),
+      modpack: optionalText(values.modpack, true),
+    });
+    applyConfig(updated.values);
+    spamCheck.value = await api.spamCheck();
+  });
+}
+
+async function disableSpamCheck() {
+  await perform(async () => {
+    spamCheck.value = await api.disableSpamCheck();
+    configForm.value.secure = false;
+  });
+}
+
+function requestSpamCheckDisable() {
+  requestConfirmation({
+    title: "关闭服务端反作弊",
+    message: "secure=0 会降低服务端原版反作弊能力，公开服务器不建议长期关闭。更改需要完全重启后生效。",
+    confirmLabel: "明确关闭 SpamCheck",
+    danger: true,
+    action: disableSpamCheck,
+  });
 }
 
 async function createWorld() {
@@ -425,6 +539,7 @@ async function createWorld() {
     await api.createWorld({ ...newWorldForm.value, name, seed });
     worlds.value = await api.worlds();
     applyConfig((await api.config()).values);
+    spamCheck.value = await api.spamCheck();
     newWorldForm.value = { name: "", world_size: 1, difficulty: 0, seed: null };
   });
 }
@@ -434,6 +549,7 @@ async function selectWorld(path: string) {
     const config = await api.selectWorld(path);
     applyConfig(config.values);
     worlds.value = await api.worlds();
+    spamCheck.value = await api.spamCheck();
   });
 }
 
@@ -467,6 +583,7 @@ function deleteWorld(world: WorldInfo) {
       await api.deleteWorld(world.name);
       worlds.value = await api.worlds();
       applyConfig((await api.config()).values);
+      spamCheck.value = await api.spamCheck();
     }),
   });
 }
@@ -522,6 +639,51 @@ function openMoveDialog(entry: ManagedFileEntry) {
   movingEntry.value = entry;
   moveDestination.value = entry.path;
   replaceMoveDestination.value = false;
+}
+
+function isEditableText(entry: ManagedFileEntry) {
+  if (entry.kind !== "file") return false;
+  const suffix = entry.name.includes(".") ? `.${entry.name.split(".").at(-1)?.toLowerCase()}` : "";
+  return [".bat", ".cfg", ".cmd", ".ini", ".json", ".ps1", ".sh", ".toml", ".txt", ".yaml", ".yml"].includes(suffix);
+}
+
+async function openTextFile(path: string | null | undefined) {
+  if (!path) return;
+  await perform(async () => {
+    const opened = await api.textFile(path);
+    textFile.value = opened;
+    textFileContent.value = opened.content;
+  });
+}
+
+function closeTextFile() {
+  if (!textFile.value) return;
+  if (!textFileDirty.value) {
+    textFile.value = null;
+    return;
+  }
+  requestConfirmation({
+    title: "放弃未保存修改",
+    message: `${textFile.value.path} 的修改尚未保存。`,
+    confirmLabel: "放弃修改",
+    danger: true,
+    action: async () => {
+      textFile.value = null;
+    },
+  });
+}
+
+async function saveTextFile() {
+  const opened = textFile.value;
+  if (!opened) return;
+  await perform(async () => {
+    await api.updateTextFile(opened, textFileContent.value);
+    textFile.value = null;
+    const [config, spamStatus] = await Promise.all([api.config(), api.spamCheck()]);
+    applyConfig(config.values);
+    spamCheck.value = spamStatus;
+    if (activeTab.value === "files") await refreshFiles();
+  });
 }
 
 async function moveManagedEntry() {
@@ -865,15 +1027,62 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
         <TaskManager v-if="activeTab === 'tasks'" ref="taskManager" @error="error = $event" />
 
-        <section v-if="activeTab === 'config'" class="panel">
+        <section v-if="activeTab === 'config'" class="panel config-workspace">
             <div class="section-heading"><FileCog :size="20" /><div><h2>服务器配置</h2><p>{{ activeWorld ? `${activeWorld.name} · 独立配置` : "未选择存档" }}</p></div></div>
-            <form class="form-grid" @submit.prevent="saveConfig">
-              <label>最大玩家数<input v-model.number="configForm.maxplayers" type="number" min="1" max="255" :disabled="!activeWorld || serverContentLocked || busy" /></label>
-              <label>端口<input v-model.number="configForm.port" type="number" min="1" max="65535" :disabled="!activeWorld || serverContentLocked || busy" /></label>
-              <label class="full">密码<input v-model="configForm.password" type="password" :disabled="!activeWorld || serverContentLocked || busy" /></label>
-              <label class="full">欢迎消息<input v-model="configForm.motd" :disabled="!activeWorld || serverContentLocked || busy" /></label>
-              <button class="primary" :disabled="!activeWorld || serverContentLocked || busy"><Save :size="17" />保存配置</button>
+            <form class="config-form" @submit.prevent="saveConfig">
+              <section class="config-section">
+                <h3>连接与房间</h3>
+                <div class="config-fields">
+                  <label>最大玩家数<input v-model.number="configForm.maxplayers" type="number" min="1" max="255" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label>端口<input v-model.number="configForm.port" type="number" min="1" max="65535" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label>密码<input v-model="configForm.password" type="password" maxlength="128" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label>服务器语言<select v-model="configForm.language" :disabled="!activeWorld || serverContentLocked || busy"><option value="">服务端默认</option><option v-for="option in languageOptions" :key="option[0]" :value="option[0]">{{ option[1] }} · {{ option[0] }}</option></select></label>
+                  <label class="full">欢迎消息<input v-model="configForm.motd" maxlength="500" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                </div>
+              </section>
+              <section class="config-section">
+                <h3>网络与运行</h3>
+                <div class="config-fields">
+                  <label>NPC 同步频率<input v-model.number="configForm.npcstream" type="number" min="0" step="1" placeholder="服务端默认" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label>进程优先级<select v-model.number="configForm.priority" :disabled="!activeWorld || serverContentLocked || busy"><option v-for="option in priorityOptions" :key="option[0]" :value="option[0]">{{ option[0] }} · {{ option[1] }}</option></select></label>
+                  <div class="config-toggle">
+                    <span><strong>服务端反作弊</strong><small>{{ configForm.secure ? "secure=1" : "secure=0" }}</small></span>
+                    <label class="switch"><input v-model="configForm.secure" type="checkbox" aria-label="启用服务端反作弊" :disabled="!activeWorld || serverContentLocked || busy" /><span></span></label>
+                  </div>
+                  <div class="config-toggle">
+                    <span><strong>UPnP 端口转发</strong><small>{{ configForm.upnp ? "upnp=1" : "upnp=0" }}</small></span>
+                    <label class="switch"><input v-model="configForm.upnp" type="checkbox" aria-label="启用 UPnP 端口转发" :disabled="!activeWorld || serverContentLocked || busy" /><span></span></label>
+                  </div>
+                </div>
+              </section>
+              <section class="config-section">
+                <h3>模组与文件</h3>
+                <div class="config-fields">
+                  <label class="full">封禁列表路径<input v-model="configForm.banlist" maxlength="1024" placeholder="banlist.txt" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label class="full">本地模组目录<input v-model="configForm.modpath" maxlength="1024" placeholder="Mods" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                  <label>Mod Pack 名称<input v-model="configForm.modpack" maxlength="200" placeholder="可选" :disabled="!activeWorld || serverContentLocked || busy" /></label>
+                </div>
+              </section>
+              <div class="config-actions"><button class="primary" :disabled="!activeWorld || serverContentLocked || busy"><Save :size="17" />保存配置</button></div>
             </form>
+            <div class="spam-check-workspace">
+              <div class="security-heading">
+                <div><ShieldCheck :size="19" /><span><strong>SpamCheck</strong><small>{{ spamCheck?.projectile_spam_matches ? `近期日志命中 ${spamCheck.projectile_spam_matches} 次 Projectile spam` : "近期日志未检测到 Projectile spam" }}</small></span></div>
+                <span :class="['read-mode', { locked: !spamCheck?.protection_disabled }]">{{ spamCheckLabel }}</span>
+              </div>
+              <div class="spam-check-grid">
+                <div><span>活动配置</span><strong>{{ spamCheck?.config_path ?? "未选择世界" }}</strong><small>{{ spamCheck?.secure_configured ? `secure=${spamCheck.secure_value}` : "未显式配置 secure" }}</small></div>
+                <div><span>启动脚本</span><strong>{{ spamCheck?.launch_script_path ?? "未检测" }}</strong><small>{{ spamCheck?.secure_launch_argument ? "检测到活动 -secure" : spamCheck?.launch_script_inspected ? "未检测到 -secure" : "无法自动检查" }}</small></div>
+                <div><span>日志来源</span><strong>{{ spamCheck?.projectile_spam_sources.join(', ') || "无命中" }}</strong><small>{{ running ? "修改后需完全重启" : "服务器已停止" }}</small></div>
+              </div>
+              <p v-if="spamCheck?.secure_launch_argument" class="security-warning">启动脚本仍包含 <code>-secure</code>，仅写入 <code>secure=0</code> 不能排除冲突。</p>
+              <p v-else-if="!configForm.secure" class="security-warning">服务端原版反作弊已关闭，公开服务器风险更高；更改需完全重启后生效。</p>
+              <div class="security-actions">
+                <button class="secondary" :disabled="!spamCheck?.config_path || busy" @click="openTextFile(spamCheck?.config_path)"><FileText :size="16" />打开配置文件</button>
+                <button class="secondary" :disabled="!spamCheck?.launch_script_path || busy" @click="openTextFile(spamCheck?.launch_script_path)"><Pencil :size="16" />打开启动脚本</button>
+                <button class="primary" :disabled="!activeWorld || spamCheck?.protection_disabled || serverContentLocked || busy" @click="requestSpamCheckDisable"><ShieldOff :size="16" />明确关闭 SpamCheck</button>
+              </div>
+            </div>
         </section>
 
         <section v-if="activeTab === 'worlds'" class="panel">
@@ -951,6 +1160,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <div class="row-actions">
                 <button v-if="entry.archive" class="icon-button" title="查看并解压" :disabled="serverContentLocked || busy" @click="inspectManagedArchive(entry)"><ArchiveRestore :size="17" /></button>
                 <a v-if="entry.kind === 'file'" class="icon-button" title="下载" :href="api.fileDownloadUrl(entry.path)" download><Download :size="17" /></a>
+                <button v-if="isEditableText(entry)" class="icon-button" title="编辑文本" :disabled="busy" @click="openTextFile(entry.path)"><FileText :size="17" /></button>
                 <button class="icon-button" title="移动或重命名" :disabled="entry.kind === 'symlink' || entry.kind === 'other' || serverContentLocked || busy" @click="openMoveDialog(entry)"><Pencil :size="17" /></button>
                 <button class="icon-button danger-icon" title="删除" :disabled="serverContentLocked || busy" @click="deleteManagedEntry(entry)"><Trash2 :size="17" /></button>
               </div>
@@ -1040,6 +1250,14 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <label class="dialog-field">目标目录（实例根留空）<input v-model="archiveDestination" maxlength="1024" placeholder="根目录" @change="refreshArchivePreview" /></label>
         <label class="check-row"><input v-model="replaceArchiveFiles" type="checkbox" :disabled="!archivePreview.conflicts.length" />覆盖已有文件</label>
         <div class="dialog-actions"><button class="secondary" @click="archivePreview = null">取消</button><button class="primary" :disabled="busy || serverContentLocked || (archivePreview.conflicts.length > 0 && !replaceArchiveFiles)" @click="extractManagedArchive"><ArchiveRestore :size="17" />解压</button></div>
+      </section>
+    </div>
+
+    <div v-if="textFile" class="modal-backdrop" role="presentation">
+      <section class="confirm-dialog text-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="text-editor-title">
+        <div class="text-editor-heading"><div><h2 id="text-editor-title">编辑文本文件</h2><p>{{ textFile.path }} · {{ formatBytes(textFile.size) }}</p></div><span v-if="serverContentLocked" class="read-mode locked">运行中只读</span></div>
+        <textarea v-model="textFileContent" aria-label="文件内容" spellcheck="false" :disabled="serverContentLocked || busy"></textarea>
+        <div class="dialog-actions"><button class="secondary" @click="closeTextFile">取消</button><button class="primary" :disabled="busy || serverContentLocked || !textFileDirty" @click="saveTextFile"><Save :size="17" />保存文件</button></div>
       </section>
     </div>
   </div>

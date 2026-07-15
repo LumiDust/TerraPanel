@@ -144,6 +144,30 @@ dt { color: #747c86; } dd { margin: 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex: none; }
 .danger-icon { color: #a53d3d; }
 
+.config-form { padding-bottom: 18px; }
+.config-section { padding: 18px 0; border-top: 1px solid #e2e5e7; }
+.config-section:first-child { padding-top: 4px; border-top: 0; }
+.config-section h3 { margin-bottom: 12px; font-size: 13px; }
+.config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.config-fields .full { grid-column: 1 / -1; }
+.config-actions { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #e2e5e7; }
+.config-toggle { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 5px 0; }
+.config-toggle > span { min-width: 0; display: grid; gap: 3px; }
+.config-toggle small { color: #7b838c; font-size: 11px; }
+.spam-check-workspace { padding-top: 18px; border-top: 1px solid #e2e5e7; }
+.security-heading, .security-heading > div, .text-editor-heading { display: flex; align-items: center; gap: 10px; }
+.security-heading { justify-content: space-between; }
+.security-heading > div > span { min-width: 0; display: grid; gap: 3px; }
+.security-heading small { color: #747c86; font-size: 11px; }
+.spam-check-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 16px; border-block: 1px solid #e8eaec; }
+.spam-check-grid > div { min-width: 0; display: grid; gap: 4px; padding: 12px 14px; border-left: 1px solid #e8eaec; }
+.spam-check-grid > div:first-child { border-left: 0; padding-left: 0; }
+.spam-check-grid span, .spam-check-grid small { color: #7b838c; font-size: 11px; }
+.spam-check-grid strong { overflow-wrap: anywhere; font-size: 12px; }
+.security-warning { margin: 12px 0 0; padding: 9px 11px; border-left: 3px solid #bd7b2d; background: #fbf6ed; color: #76551f; font-size: 12px; }
+.security-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.security-actions .primary { margin-left: auto; }
+
 .file-manager { padding-bottom: 8px; }
 .file-manager-header { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #e2e5e7; }
 .breadcrumbs { min-width: 0; display: flex; align-items: center; gap: 3px; overflow-x: auto; color: #8a929b; }
@@ -205,6 +229,11 @@ button.file-name:hover strong { color: #237a5b; }
 .confirm-dialog { width: min(440px, 100%); padding: 20px; border-radius: 6px; background: #fff; box-shadow: 0 18px 50px #0004; }
 .confirm-dialog p { margin-top: 8px; color: #68717b; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.text-editor-dialog { width: min(920px, 100%); }
+.text-editor-heading { justify-content: space-between; }
+.text-editor-heading > div { min-width: 0; }
+.text-editor-heading p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-editor-dialog textarea { width: 100%; height: min(58vh, 620px); min-height: 320px; margin-top: 16px; padding: 12px; resize: vertical; border: 1px solid #c9ced3; border-radius: 4px; background: #171a1f; color: #e0e4e8; font: 12px/1.55 "Cascadia Code", Consolas, monospace; white-space: pre; overflow: auto; }
 
 .logs-panel { overflow: hidden; }
 .log-toolbar { padding: 10px; border-bottom: 1px solid #dfe1e3; display: flex; justify-content: space-between; gap: 10px; }
@@ -223,6 +252,9 @@ button.file-name:hover strong { color: #237a5b; }
   .file-actions-bar { grid-template-columns: 1fr; }
   .world-create-form { grid-template-columns: minmax(180px, 1fr) 110px 110px minmax(150px, 1fr); }
   .world-create-form button { justify-self: start; }
+  .spam-check-grid { grid-template-columns: 1fr; }
+  .spam-check-grid > div { border-left: 0; border-top: 1px solid #e8eaec; padding-inline: 0; }
+  .spam-check-grid > div:first-child { border-top: 0; }
 }
 
 @media (max-width: 720px) {
@@ -238,6 +270,8 @@ button.file-name:hover strong { color: #237a5b; }
   .topbar p { max-width: 180px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
   .overview-grid { grid-template-columns: 1fr 1fr; }
   .setup-grid, .advanced-association form, .form-grid { grid-template-columns: 1fr; }
+  .config-fields { grid-template-columns: 1fr; }
+  .config-fields .full { grid-column: auto; }
   .asset-upload { grid-template-columns: 1fr auto; }
   .asset-upload .file-picker { grid-column: 1 / -1; }
   .form-grid .full { grid-column: auto; }
@@ -256,6 +290,10 @@ button.file-name:hover strong { color: #237a5b; }
   .world-create-form { grid-template-columns: 1fr 1fr; }
   .world-create-form label:first-child, .world-create-form label:nth-child(4), .world-create-form button { grid-column: 1 / -1; }
   .world-create-form button { width: 100%; }
+  .security-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .security-actions .primary { grid-column: 1 / -1; margin-left: 0; }
+  .text-editor-dialog { height: calc(100vh - 28px); display: flex; flex-direction: column; }
+  .text-editor-dialog textarea { height: auto; min-height: 0; flex: 1; }
 }
 
 @media (max-width: 440px) {
@@ -281,4 +319,7 @@ button.file-name:hover strong { color: #237a5b; }
   .directory-form { grid-template-columns: 1fr; }
   .world-create-form { grid-template-columns: 1fr; }
   .world-create-form label:first-child, .world-create-form label:nth-child(4), .world-create-form button { grid-column: auto; }
+  .security-heading { align-items: flex-start; }
+  .security-actions { grid-template-columns: 1fr; }
+  .security-actions .primary { grid-column: auto; }
 }

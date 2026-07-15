@@ -14,6 +14,7 @@ from terrapanel.services.official_installer import OfficialGithubInstaller
 from terrapanel.services.process_manager import ProcessManager
 from terrapanel.services.provisioning_service import ProvisioningService
 from terrapanel.services.server_config_service import ServerConfigService
+from terrapanel.services.startup_settings_service import StartupSettingsService
 from terrapanel.services.task_service import TaskService
 from terrapanel.services.world_service import WorldService
 
@@ -30,6 +31,7 @@ class ServiceContainer:
     files: FileService
     provisioning: ProvisioningService
     tasks: TaskService
+    startup_settings: StartupSettingsService
 
 
 def build_services(settings: Settings) -> ServiceContainer:
@@ -38,6 +40,7 @@ def build_services(settings: Settings) -> ServiceContainer:
     repository = InstanceRepository(settings.storage.data_dir / "instance.json")
     instances = InstanceService(repository, server_paths)
     server_config = ServerConfigService(instances)
+    logs = LogService(instances)
     process = ProcessManager(
         instances,
         config_file_resolver=server_config.active_config_path,
@@ -72,7 +75,7 @@ def build_services(settings: Settings) -> ServiceContainer:
         server_config=server_config,
         worlds=worlds,
         mods=ModService(instances, process, max_upload_size=settings.mods.max_upload_size),
-        logs=LogService(instances),
+        logs=logs,
         backups=backups,
         files=FileService(
             instances,
@@ -83,4 +86,5 @@ def build_services(settings: Settings) -> ServiceContainer:
         ),
         provisioning=provisioning,
         tasks=tasks,
+        startup_settings=StartupSettingsService(instances, server_config, logs),
     )

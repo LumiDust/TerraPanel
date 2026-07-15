@@ -54,6 +54,26 @@ export interface FileEntry {
   archive: boolean;
 }
 
+export interface TextFileView {
+  path: string;
+  content: string;
+  revision: string;
+  size: number;
+}
+
+export interface SpamCheckStatus {
+  config_path: string | null;
+  secure_value: string | null;
+  secure_configured: boolean;
+  secure_enabled: boolean | null;
+  launch_script_path: string;
+  launch_script_inspected: boolean;
+  secure_launch_argument: boolean;
+  projectile_spam_matches: number;
+  projectile_spam_sources: string[];
+  protection_disabled: boolean;
+}
+
 export interface DirectoryListing {
   path: string;
   parent: string | null;
@@ -172,6 +192,21 @@ export interface ServerConfigView {
   values: Record<string, string>;
 }
 
+export interface ServerConfigUpdate {
+  maxplayers: number;
+  port: number;
+  password: string | null;
+  motd: string | null;
+  language: string | null;
+  secure: boolean;
+  upnp: boolean;
+  npcstream: number | null;
+  priority: number;
+  banlist: string | null;
+  modpath: string | null;
+  modpack: string | null;
+}
+
 export type ProvisionState = "idle" | "running" | "succeeded" | "failed" | "cancelled";
 export type ProvisionStage =
   | "idle"
@@ -260,11 +295,15 @@ export const api = {
       body: JSON.stringify({ command }),
     }),
   config: () => request<ServerConfigView>("/server-config"),
-  updateConfig: (values: Record<string, unknown>) =>
+  updateConfig: (values: ServerConfigUpdate) =>
     request<ServerConfigView>("/server-config", {
       method: "PATCH",
       body: JSON.stringify(values),
     }),
+  spamCheck: () => request<SpamCheckStatus>("/server-config/spam-check"),
+  disableSpamCheck: () => request<SpamCheckStatus>("/server-config/spam-check/disable", {
+    method: "POST",
+  }),
   worlds: () => request<WorldInfo[]>("/worlds"),
   createWorld: (values: WorldCreateRequest) =>
     request<WorldInfo>("/worlds", {
@@ -332,6 +371,13 @@ export const api = {
     }),
   fileDownloadUrl: (path: string) =>
     `/api/v1/files/download?${new URLSearchParams({ path })}`,
+  textFile: (path: string) =>
+    request<TextFileView>(`/files/text?${new URLSearchParams({ path })}`),
+  updateTextFile: (file: TextFileView, content: string) =>
+    request<TextFileView>("/files/text", {
+      method: "PUT",
+      body: JSON.stringify({ path: file.path, content, revision: file.revision }),
+    }),
   inspectArchive: (path: string, destination = "") =>
     request<ArchivePreview>(
       `/files/archive?${new URLSearchParams({ path, destination })}`,

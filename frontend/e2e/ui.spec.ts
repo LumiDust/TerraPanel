@@ -82,6 +82,55 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     },
   ];
   const controls = { stopDelayMs: 0 };
+  const configValues: Record<string, string> = {
+    maxplayers: "12",
+    port: "7777",
+    motd: "Welcome",
+    secure: "1",
+    upnp: "0",
+    priority: "1",
+  };
+  let textRevision = 1;
+  const textFiles = new Map<string, string>([
+    ["WorldConfigs/TerraPrime.txt", "maxplayers=12\nport=7777\nmotd=Welcome\nsecure=1\nupnp=0\npriority=1\n"],
+    ["serverconfig.txt", "maxplayers=12\nport=7777\nsecure=1\n"],
+    ["server/start-tModLoaderServer.sh", "#!/usr/bin/env bash\nlaunch_args=\"-server\"\n"],
+  ]);
+  const activeConfigPath = () => {
+    const world = worldsOutput.find((entry) => entry.selected);
+    return world ? `WorldConfigs/${world.name}.txt` : null;
+  };
+  const currentRevision = () => textRevision.toString(16).padStart(64, "0");
+  const serializeConfig = () => `${Object.entries(configValues).map(([key, value]) => `${key}=${value}`).join("\n")}\n`;
+  const syncActiveConfigText = () => {
+    const path = activeConfigPath();
+    if (path) textFiles.set(path, serializeConfig());
+  };
+  const setSecure = (value: string) => {
+    configValues.secure = value;
+    syncActiveConfigText();
+    textRevision += 1;
+  };
+  const spamStatus = () => {
+    const script = textFiles.get("server/start-tModLoaderServer.sh") ?? "";
+    const secureLaunchArgument = script
+      .split("\n")
+      .some((line) => !line.trimStart().startsWith("#") && /(?:^|\s)-secure(?:\s|$|\")/.test(line));
+    const secureValue = configValues.secure ?? null;
+    const enabled = secureValue === "1" ? true : secureValue === "0" ? false : null;
+    return {
+      config_path: activeConfigPath(),
+      secure_value: activeConfigPath() ? secureValue : null,
+      secure_configured: activeConfigPath() !== null && secureValue !== null,
+      secure_enabled: activeConfigPath() ? enabled : null,
+      launch_script_path: "server/start-tModLoaderServer.sh",
+      launch_script_inspected: true,
+      secure_launch_argument: secureLaunchArgument,
+      projectile_spam_matches: 2,
+      projectile_spam_sources: ["server"],
+      protection_disabled: activeConfigPath() !== null && enabled === false && !secureLaunchArgument,
+    };
+  };
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -91,6 +140,7 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
         const worldIndex = worldsOutput.findIndex((world) => world.name === name);
         const deleted = worldIndex >= 0 ? worldsOutput[worldIndex] : null;
         if (worldIndex >= 0) worldsOutput.splice(worldIndex, 1);
+        if (deleted) textFiles.delete(`WorldConfigs/${deleted.name}.txt`);
         await route.fulfill({ json: deleted?.exists ? [`${name}.wld`, `${name}.twld`] : [] });
       } else if (path.startsWith("/api/v1/tasks/")) {
         const id = decodeURIComponent(path.slice("/api/v1/tasks/".length));
@@ -116,8 +166,23 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     else if (path === "/api/v1/provisioning") {
       body = { state: "idle", stage: "idle", operation: null, name: null, root_dir: null, version: null, started_at: null, finished_at: null, error: null, instance: null, process: null };
     } else if (path === "/api/v1/provisioning/logs") body = [];
-    else if (path === "/api/v1/server-config") {
-      body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
+    else if (path === "/api/v1/server-config/spam-check/disable") {
+      setSecure("0");
+      body = spamStatus();
+    } else if (path === "/api/v1/server-config/spam-check") {
+      body = spamStatus();
+    } else if (path === "/api/v1/server-config") {
+      if (route.request().method() === "PATCH") {
+        const payload = route.request().postDataJSON() as Record<string, unknown>;
+        for (const [key, value] of Object.entries(payload)) {
+          if (value === null) delete configValues[key];
+          else if (typeof value === "boolean") configValues[key] = value ? "1" : "0";
+          else configValues[key] = String(value);
+        }
+        syncActiveConfigText();
+        textRevision += 1;
+      }
+      body = { values: { ...configValues } };
     } else if (path === "/api/v1/worlds" && route.request().method() === "POST") {
       const payload = route.request().postDataJSON() as { name: string };
       for (const world of worldsOutput) world.selected = false;
@@ -131,13 +196,14 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
         exists: false,
       };
       worldsOutput.push(created);
+      textFiles.set(`WorldConfigs/${payload.name}.txt`, serializeConfig());
       body = created;
     } else if (path === "/api/v1/worlds") {
       body = worldsOutput;
     } else if (path === "/api/v1/worlds/select") {
       const payload = route.request().postDataJSON() as { path: string };
       for (const world of worldsOutput) world.selected = world.path === payload.path;
-      body = { values: { maxplayers: "12", port: "7777", motd: "Welcome" } };
+      body = { values: { ...configValues } };
     } else if (path === "/api/v1/mods") {
       body = modsOutput;
     } else if (path === "/api/v1/mods/enable" || path === "/api/v1/mods/disable") {
@@ -200,6 +266,25 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
       const payload = route.request().postDataJSON() as typeof task;
       Object.assign(task, payload, { updated_at: "2026-07-12T03:22:00Z" });
       body = task;
+    } else if (path === "/api/v1/files/text" && route.request().method() === "GET") {
+      const filePath = url.searchParams.get("path") ?? "";
+      const content = textFiles.get(filePath) ?? "";
+      body = { path: filePath, content, revision: currentRevision(), size: Buffer.byteLength(content) };
+    } else if (path === "/api/v1/files/text" && route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON() as { path: string; content: string };
+      textFiles.set(payload.path, payload.content);
+      textRevision += 1;
+      if (payload.path === activeConfigPath()) {
+        for (const key of Object.keys(configValues)) delete configValues[key];
+        for (const line of payload.content.split(/\r?\n/)) {
+          const normalized = line.trim();
+          if (!normalized || normalized.startsWith("#")) continue;
+          const separator = normalized.indexOf("=");
+          if (separator < 1) continue;
+          configValues[normalized.slice(0, separator).trim().toLowerCase()] = normalized.slice(separator + 1).trim();
+        }
+      }
+      body = { path: payload.path, content: payload.content, revision: currentRevision(), size: Buffer.byteLength(payload.content) };
     } else if (path === "/api/v1/files" && route.request().method() === "GET") {
       const directory = url.searchParams.get("path") ?? "";
       body = directory === "Mods"
@@ -217,6 +302,7 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
             entries: [
               { name: "ModConfigs", path: "ModConfigs", kind: "directory", size: null, modified_at: "2026-07-12T03:15:00Z", archive: false },
               { name: "Mods", path: "Mods", kind: "directory", size: null, modified_at: "2026-07-12T03:15:00Z", archive: false },
+              { name: "serverconfig.txt", path: "serverconfig.txt", kind: "file", size: 43, modified_at: "2026-07-12T03:15:00Z", archive: false },
               { name: "SaveData.zip", path: "SaveData.zip", kind: "file", size: 714222878, modified_at: "2026-07-12T03:15:00Z", archive: true },
             ],
           };
@@ -251,7 +337,38 @@ async function mockConfiguredApi(page: Page, state: "running" | "stopped" = "run
     else if (path.endsWith("/console")) body = { status: "accepted" };
     await route.fulfill({ json: body });
   });
-  return { consoleOutput, controls, modsOutput, taskOutput, taskRuns };
+  return { consoleOutput, configValues, controls, modsOutput, taskOutput, taskRuns };
+}
+
+async function mockUnconfiguredApi(page: Page) {
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let body: unknown = {};
+    if (path === "/api/v1/instance") {
+      body = {
+        configured: false,
+        instance: null,
+        process: { state: "stopped", pid: null, started_at: null, exit_code: null },
+      };
+    } else if (path === "/api/v1/provisioning") {
+      body = {
+        state: "idle",
+        stage: "idle",
+        operation: null,
+        name: null,
+        root_dir: null,
+        version: null,
+        started_at: null,
+        finished_at: null,
+        error: null,
+        instance: null,
+        process: null,
+      };
+    } else if (path === "/api/v1/provisioning/logs") {
+      body = [];
+    }
+    await route.fulfill({ json: body });
+  });
 }
 
 async function mockInstallingApi(page: Page) {
@@ -296,6 +413,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 test("unconfigured desktop is usable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  await mockUnconfiguredApi(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "新建服务器" })).toBeVisible();
@@ -346,6 +464,7 @@ test("installation progress is diagnosable", async ({ page }) => {
 test("unconfigured mobile setup fits", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  await mockUnconfiguredApi(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "新建服务器" })).toBeVisible();
@@ -416,6 +535,161 @@ test("configured mobile overview fits", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/configured-mobile.png", fullPage: true });
+});
+
+test("server configuration saves every supported non-world field", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const { configValues } = await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "服务器" }).click();
+
+  await page.getByLabel("最大玩家数").fill("24");
+  await page.getByRole("spinbutton", { name: "端口", exact: true }).fill("7788");
+  await page.getByLabel("密码").fill("server-secret");
+  await page.getByLabel("服务器语言").selectOption("zh-Hans");
+  await page.getByLabel("欢迎消息").fill("欢迎来到 TerraPanel");
+  await page.getByLabel("NPC 同步频率").fill("120");
+  await page.getByLabel("进程优先级").selectOption("3");
+  await page.getByRole("checkbox", { name: "启用 UPnP 端口转发" }).check();
+  await page.getByLabel("封禁列表路径").fill("config/banlist.txt");
+  await page.getByLabel("本地模组目录").fill("Mods/Local");
+  await page.getByLabel("Mod Pack 名称").fill("CalamityPack");
+
+  const saveRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/server-config") && request.method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "保存配置" }).click();
+  const request = await saveRequest;
+  expect(request.postDataJSON()).toEqual({
+    maxplayers: 24,
+    port: 7788,
+    password: "server-secret",
+    motd: "欢迎来到 TerraPanel",
+    language: "zh-Hans",
+    secure: true,
+    upnp: true,
+    npcstream: 120,
+    priority: 3,
+    banlist: "config/banlist.txt",
+    modpath: "Mods/Local",
+    modpack: "CalamityPack",
+  });
+  expect(configValues).toMatchObject({
+    maxplayers: "24",
+    port: "7788",
+    password: "server-secret",
+    language: "zh-Hans",
+    secure: "1",
+    upnp: "1",
+    npcstream: "120",
+    priority: "3",
+    banlist: "config/banlist.txt",
+    modpath: "Mods/Local",
+    modpack: "CalamityPack",
+  });
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/server-config-desktop.png", fullPage: true });
+
+  await page.getByLabel("密码").fill("");
+  await page.getByLabel("服务器语言").selectOption("");
+  await page.getByLabel("欢迎消息").fill("");
+  await page.getByLabel("NPC 同步频率").fill("");
+  await page.getByLabel("封禁列表路径").fill("   ");
+  await page.getByLabel("本地模组目录").fill("");
+  await page.getByLabel("Mod Pack 名称").fill("");
+  const clearRequest = page.waitForRequest(
+    (candidate) => candidate.url().endsWith("/api/v1/server-config") && candidate.method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "保存配置" }).click();
+  expect((await clearRequest).postDataJSON()).toMatchObject({
+    password: null,
+    motd: null,
+    language: null,
+    npcstream: null,
+    banlist: null,
+    modpath: null,
+    modpack: null,
+  });
+  for (const key of ["password", "motd", "language", "npcstream", "banlist", "modpath", "modpack"]) {
+    expect(configValues).not.toHaveProperty(key);
+  }
+});
+
+test("server configuration fits mobile", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "服务器" }).click();
+  await page.getByLabel("Mod Pack 名称").scrollIntoViewIfNeeded();
+  await expect(page.getByLabel("Mod Pack 名称")).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存配置" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/server-config-mobile.png", fullPage: true });
+});
+
+test("spam check can be diagnosed, disabled, and edited", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "stopped");
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "服务器" }).click();
+
+  await expect(page.getByText("近期日志命中 2 次 Projectile spam")).toBeVisible();
+  await expect(page.locator(".security-heading .read-mode")).toHaveText("已启用");
+  const disableRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/server-config/spam-check/disable") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "明确关闭 SpamCheck" }).click();
+  const confirmation = page.getByRole("dialog", { name: "关闭服务端反作弊" });
+  await expect(confirmation.getByText("公开服务器不建议长期关闭")).toBeVisible();
+  await confirmation.getByRole("button", { name: "明确关闭 SpamCheck" }).click();
+  await disableRequest;
+  await expect(page.locator(".security-heading .read-mode")).toHaveText("已明确关闭");
+  await expect(page.getByRole("checkbox", { name: "启用服务端反作弊" })).not.toBeChecked();
+
+  await page.getByRole("button", { name: "打开配置文件" }).click();
+  const editor = page.getByRole("dialog", { name: "编辑文本文件" });
+  await expect(editor.getByLabel("文件内容")).toHaveValue(/secure=0/);
+  await editor.getByLabel("文件内容").fill("maxplayers=12\nport=7777\nsecure=1\n");
+  const saveRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/api/v1/files/text") && request.method() === "PUT",
+  );
+  await editor.getByRole("button", { name: "保存文件" }).click();
+  await saveRequest;
+  await expect(editor).toBeHidden();
+  await expect(page.locator(".security-heading .read-mode")).toHaveText("已启用");
+  const secureToggle = page.getByRole("checkbox", { name: "启用服务端反作弊" });
+  await expect(secureToggle).toBeChecked();
+  await expect(secureToggle.locator("xpath=following-sibling::span")).toHaveCSS(
+    "background-color",
+    "rgb(35, 122, 91)",
+  );
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/spam-check-desktop.png", fullPage: true });
+});
+
+test("startup file editor is read-only on mobile while running", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockConfiguredApi(page, "running");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "服务器" }).click();
+  await page.getByRole("button", { name: "打开启动脚本" }).click();
+  const editor = page.getByRole("dialog", { name: "编辑文本文件" });
+  await expect(editor.getByText("运行中只读")).toBeVisible();
+  await expect(editor.getByLabel("文件内容")).toBeDisabled();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/screenshots/startup-editor-mobile.png", fullPage: true });
 });
 
 test("scheduled tasks can be created and run", async ({ page }) => {
@@ -668,6 +942,7 @@ test("file manager handles save data archives", async ({ page }) => {
   await page.getByLabel("主导航").getByRole("button", { name: "文件" }).click();
   await expect(page.getByText("SaveData.zip")).toBeVisible();
   await expect(page.getByText("681.1 MB")).toBeVisible();
+  await expect(page.getByTitle("编辑文本")).toBeVisible();
 
   await page.getByRole("button", { name: "Mods" }).click();
   await expect(page.getByText("enabled.json")).toBeVisible();
@@ -709,7 +984,7 @@ test("file manager is readable and locked on mobile while running", async ({ pag
   await expect(page.getByText("运行中只读")).toBeVisible();
   await expect(page.getByRole("button", { name: "上传" })).toBeDisabled();
   await expect(page.getByTitle("查看并解压")).toBeDisabled();
-  await expect(page.getByTitle("下载")).toBeVisible();
+  await expect(page.locator(".file-row").filter({ hasText: "SaveData.zip" }).getByTitle("下载")).toBeVisible();
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/screenshots/files-mobile.png", fullPage: true });

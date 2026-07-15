@@ -15,6 +15,8 @@ from terrapanel.domain.files import (
     DirectoryListing,
     FileEntry,
     FileMove,
+    TextFileUpdate,
+    TextFileView,
 )
 from terrapanel.services.container import ServiceContainer
 
@@ -71,6 +73,18 @@ async def upload_file(
 def download_file(path: str, services: Services) -> FileResponse:
     file = services.files.download_path(path)
     return FileResponse(file, filename=file.name)
+
+
+@router.get("/text", response_model=TextFileView)
+def read_text_file(path: str, services: Services) -> TextFileView:
+    return services.files.read_text(path)
+
+
+@router.put("/text", response_model=TextFileView)
+def update_text_file(request: TextFileUpdate, services: Services) -> TextFileView:
+    if services.provisioning.is_running():
+        raise ConflictError("Wait for installation or update to finish")
+    return services.files.update_text(request)
 
 
 @router.patch("", response_model=FileEntry)
